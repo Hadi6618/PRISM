@@ -433,14 +433,14 @@ def smooth_scores(
 
 def search_best_sigma(
     aligned: List[AlignedVideo],
-    sigma_candidates: Tuple[float, ...] = (0, 1, 2, 3, 4, 5, 6, 8, 10),
-    normalization: str = "global_minmax",
+    sigma_candidates: Tuple[float, ...] = (0, 1, 2, 3, 4, 5, 6, 8, 10, 15),
+    normalization: Optional[str] = None,
 ) -> Tuple[float, dict]:
     """Grid-search over sigma values to maximise per-model standalone AUC.
 
     For each candidate sigma we:
-    1. Smooth both model streams.
-    2. Apply the requested normalization.
+    1. Apply the requested normalization (if provided).
+    2. Smooth both model streams.
     3. Compute the Micro AUC for STG-NF alone and MULDE alone.
     4. Pick the sigma that maximises ``(stgnf_auc + mulde_auc) / 2``.
 
@@ -455,8 +455,9 @@ def search_best_sigma(
     for sigma in sigma_candidates:
         # Deep-copy so we do not mutate the original aligned list.
         trial = copy.deepcopy(aligned)
+        if normalization is not None:
+            trial = apply_normalization(trial, strategy=normalization)
         trial = smooth_scores(trial, sigma=sigma)
-        trial = apply_normalization(trial, strategy=normalization)
 
         all_stgnf = np.concatenate([v.stgnf_scores for v in trial])
         all_mulde = np.concatenate([v.mulde_scores for v in trial])
@@ -814,12 +815,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"  Skipped (no labels):  {len(align_stats['videos_skipped_no_labels'])}"
         )
 
+    # ---- Normalization (BEFORE Smoothing) -----------------------------------
+    aligned = apply_normalization(aligned, strategy=args.normalization)
+    print(f"Normalization strategy:     {args.normalization}")
+    # -------------------------------------------------------------------------
+
     # ---- Gaussian temporal smoothing ----------------------------------------
     sigma_search_results: dict = {}
     if args.smooth_sigma_search:
         print("\nSearching for best Gaussian smoothing sigma ...")
+        # Pass normalization=None since it is already applied
         chosen_sigma, sigma_search_results = search_best_sigma(
-            aligned, normalization=args.normalization
+            aligned, normalization=None
         )
         print(f"Best sigma = {chosen_sigma} (maximises avg standalone AUC)")
     else:
@@ -831,9 +838,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         print("Gaussian smoothing:         disabled (sigma=0)")
     # -------------------------------------------------------------------------
-
-    aligned = apply_normalization(aligned, strategy=args.normalization)
-    print(f"Normalization strategy:     {args.normalization}")
 
     # Quick per-model Micro AUC snapshot for diagnostics.
     all_stgnf = np.concatenate([v.stgnf_scores for v in aligned])

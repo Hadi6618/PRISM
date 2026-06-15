@@ -1,8 +1,8 @@
 {
   "best": {
-    "beta_1_stgnf": 0.553,
-    "beta_2_mulde": 0.44699999999999995,
-    "max_micro_auc": 0.8870588227770346,
+    "beta_1_stgnf": 0.546,
+    "beta_2_mulde": 0.45399999999999996,
+    "max_micro_auc": 0.8932473791526987,
     "num_frames": 40791,
     "num_videos": 107
   },
@@ -11,7 +11,7 @@
     "num_videos": 107,
     "beta_1_grid_size": 1001,
     "normalization": "global_rank",
-    "smooth_sigma": 2.0,
+    "smooth_sigma": 15.0,
     "sigma_search": {
       "0.0": {
         "stgnf_auc": 0.834893,
@@ -19,44 +19,49 @@
         "avg_auc": 0.812351
       },
       "1.0": {
-        "stgnf_auc": 0.834911,
-        "mulde_auc": 0.795562,
-        "avg_auc": 0.815236
+        "stgnf_auc": 0.834989,
+        "mulde_auc": 0.796649,
+        "avg_auc": 0.815819
       },
       "2.0": {
-        "stgnf_auc": 0.834949,
-        "mulde_auc": 0.796849,
-        "avg_auc": 0.815899
+        "stgnf_auc": 0.835244,
+        "mulde_auc": 0.799726,
+        "avg_auc": 0.817485
       },
       "3.0": {
-        "stgnf_auc": 0.834979,
-        "mulde_auc": 0.796637,
-        "avg_auc": 0.815808
+        "stgnf_auc": 0.835625,
+        "mulde_auc": 0.80119,
+        "avg_auc": 0.818407
       },
       "4.0": {
-        "stgnf_auc": 0.834944,
-        "mulde_auc": 0.795917,
-        "avg_auc": 0.815431
+        "stgnf_auc": 0.836087,
+        "mulde_auc": 0.802202,
+        "avg_auc": 0.819145
       },
       "5.0": {
-        "stgnf_auc": 0.834801,
-        "mulde_auc": 0.794868,
-        "avg_auc": 0.814834
+        "stgnf_auc": 0.836591,
+        "mulde_auc": 0.803076,
+        "avg_auc": 0.819834
       },
       "6.0": {
-        "stgnf_auc": 0.834515,
-        "mulde_auc": 0.793509,
-        "avg_auc": 0.814012
+        "stgnf_auc": 0.8371,
+        "mulde_auc": 0.803849,
+        "avg_auc": 0.820474
       },
       "8.0": {
-        "stgnf_auc": 0.833364,
-        "mulde_auc": 0.790086,
-        "avg_auc": 0.811725
+        "stgnf_auc": 0.838011,
+        "mulde_auc": 0.805162,
+        "avg_auc": 0.821587
       },
       "10.0": {
-        "stgnf_auc": 0.831447,
-        "mulde_auc": 0.786037,
-        "avg_auc": 0.808742
+        "stgnf_auc": 0.838693,
+        "mulde_auc": 0.80613,
+        "avg_auc": 0.822411
+      },
+      "15.0": {
+        "stgnf_auc": 0.839021,
+        "mulde_auc": 0.80684,
+        "avg_auc": 0.82293
       }
     }
   },
