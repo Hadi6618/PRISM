@@ -1,16 +1,16 @@
 {
   "best": {
-    "beta_1_stgnf": 0.05,
-    "beta_2_mulde": 0.95,
-    "max_micro_auc": 0.8717301322314427,
+    "beta_1_stgnf": 0.553,
+    "beta_2_mulde": 0.44699999999999995,
+    "max_micro_auc": 0.8870588227770346,
     "num_frames": 40791,
     "num_videos": 107
   },
   "summary": {
     "num_frames": 40791,
     "num_videos": 107,
-    "beta_1_grid_size": 101,
-    "normalization": "global_minmax",
+    "beta_1_grid_size": 1001,
+    "normalization": "global_rank",
     "smooth_sigma": 2.0,
     "sigma_search": {
       "0.0": {
@@ -84,13 +84,13 @@
         "-2|anomaly": {
           "videos_aligned": 107,
           "frames_total": 40577,
-          "micro_auc_stgnf": 0.1674854399899877,
+          "micro_auc_stgnf": 0.16748543998998766,
           "stgnf_score_mode": "anomaly"
         },
         "-2|normality": {
           "videos_aligned": 107,
           "frames_total": 40577,
-          "micro_auc_stgnf": 0.8325145600100122,
+          "micro_auc_stgnf": 0.8325145600100123,
           "stgnf_score_mode": "normality"
         },
         "-1|anomaly": {
@@ -102,7 +102,7 @@
         "-1|normality": {
           "videos_aligned": 107,
           "frames_total": 40684,
-          "micro_auc_stgnf": 0.8338588849644629,
+          "micro_auc_stgnf": 0.8338588849644628,
           "stgnf_score_mode": "normality"
         },
         "+0|anomaly": {
@@ -114,7 +114,7 @@
         "+0|normality": {
           "videos_aligned": 107,
           "frames_total": 40791,
-          "micro_auc_stgnf": 0.8348926954680306,
+          "micro_auc_stgnf": 0.8348926954680305,
           "stgnf_score_mode": "normality"
         },
         "+1|anomaly": {
@@ -126,13 +126,13 @@
         "+1|normality": {
           "videos_aligned": 107,
           "frames_total": 40684,
-          "micro_auc_stgnf": 0.8352799028485566,
+          "micro_auc_stgnf": 0.8352799028485565,
           "stgnf_score_mode": "normality"
         },
         "+2|anomaly": {
           "videos_aligned": 107,
           "frames_total": 40577,
-          "micro_auc_stgnf": 0.1646348315365634,
+          "micro_auc_stgnf": 0.16463483153656336,
           "stgnf_score_mode": "anomaly"
         },
         "+2|normality": {
@@ -142,7 +142,7 @@
           "stgnf_score_mode": "normality"
         }
       },
-      "chosen_stgnf_micro_auc": 0.8348926954680306
+      "chosen_stgnf_micro_auc": 0.8348926954680305
     }
   },
   "stgnf_meta": {

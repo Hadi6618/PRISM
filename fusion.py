@@ -130,7 +130,10 @@ def _rank_to_unit(values: np.ndarray) -> np.ndarray:
     for s, e in zip(starts, ends):
         tied_ranks[s:e] = (s + e - 1) / 2.0
     if sub.shape[0] > 1:
-        ranks[finite] = tied_ranks / float(sub.shape[0] - 1)
+        normalized_ranks = tied_ranks / float(sub.shape[0] - 1)
+        sub_ranks = np.empty_like(normalized_ranks)
+        sub_ranks[order] = normalized_ranks
+        ranks[finite] = sub_ranks
     else:
         ranks[finite] = 0.5
     return ranks
