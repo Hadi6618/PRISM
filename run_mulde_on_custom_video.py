@@ -37,6 +37,7 @@ import cv2
 from pathlib import Path
 import matplotlib.pyplot as plt
 import joblib
+import subprocess
 from decord import VideoReader, cpu
 from scipy.ndimage import gaussian_filter1d
 
