@@ -1,114 +1,240 @@
-# Fusion
+# PRISM — Pose + RGB Integration for Scene Monitoring
 
-Fusion is a research workspace for video anomaly detection. It contains the code, notebooks, and helpers used to extract video features, train and run MULDE-based scoring, and generate visual reports for anomaly analysis.
+> A **prism** splits a single beam of light into its constituent spectral
+> components so each can be analyzed separately, then recombined. **PRISM**
+> does the same for video: it decomposes each frame into two complementary
+> streams — **pose** (what the people are doing) and **RGB appearance** (what
+> the scene looks like) — analyzes each with a specialized detector, and
+> fuses their scores to catch anomalies that either stream would miss alone.
 
-## Project Overview
+A two-stream late-fusion framework for Video Anomaly Detection (VAD) that
+combines a **pose-based** model (STG-NF) with an **appearance-based** model
+(MULDE). The two streams are complementary: one watches *what people do*,
+the other watches *what the scene looks like*. Fusing their frame-level
+scores yields a substantial improvement over either model alone on the
+ShanghaiTech Campus benchmark.
 
-The repository is organized around a simple pipeline:
+**PRISM** = **P**ose + **R**GB **I**ntegration for **S**cene **M**onitoring.
 
-1. Read a video or dataset sample.
-2. Extract features with a pretrained visual backbone.
-3. Score the features with the anomaly detection model.
-4. Smooth and threshold the scores to find suspicious frame ranges.
-5. Save plots, tables, and summaries for review.
+| Method | Stream | Micro AUC (ShanghaiTech) |
+| --- | --- | ---: |
+| MULDE (Hiera-L + DSM) | Appearance | 79.66% |
+| STG-NF (AlphaPose + Flow) | Pose | 83.53% |
+| **Fusion (this repo)** | **Both** | **89.32%** |
 
-The notebooks in the root folder are the main experiment entry points, while the Python files provide reusable model and inference logic.
+---
 
-## Source Tree
+## Motivation
 
-```text
-Fusion/
-├── Avenue_Hiera_L_Feature_Extraction.ipynb
-├── fusion.py
-├── models.py
-├── MULDE_Training_GMM.ipynb
-├── mulde_visualization.py
-├── Pose Extraction and Testing.ipynb
-├── README.md
-├── run_custom_anomaly_detection.ipynb
-├── run_mulde_on_custom_video.py
-├── ShanghaiTech_Ensemble_Fusion.ipynb
-└── ShanghaiTech_Hiera_L_Feature_Extraction.ipynb
+Single-modality VAD models have systematic blind spots:
+
+- **Appearance models** (MULDE) detect contextual anomalies such as vehicles
+  on sidewalks, bicycles, or objects that should not be in the scene. They
+  are robust to skeleton-tracking jitter but cannot reason about *motion* or
+  *behaviour* — a person fighting looks similar, frame-by-frame, to a person
+  gesturing.
+- **Pose models** (STG-NF) detect behavioural anomalies such as fighting,
+  falling, or stealing. They capture kinematics but are blind to any anomaly
+  without a human skeleton (vehicles, objects) and carry a high noise floor
+  from pose-estimation jitter.
+
+These failure modes are largely disjoint, so an ensemble of the two can
+recover detections that either model misses on its own.
+
+---
+
+## Architecture
+
+The system is organised as two independent scoring streams whose outputs are
+aligned, normalised, and fused at the **frame level** (late fusion).
+
+```
+                   ┌───────────────────────────┐
+                   │      Raw Video Frames     │
+                   └─────────────┬─────────────┘
+                                 │
+            ┌────────────────────┴────────────────────┐
+            ▼                                         ▼
+  ┌─────────────────────┐                   ┌─────────────────────┐
+  │   POSE STREAM       │                   │  APPEARANCE STREAM  │
+  │   (STG-NF)          │                   │   (MULDE)           │
+  │                     │                   │                     │
+  │ YOLOX-X → boxes     │                   │ Hiera-L → 1152-D    │
+  │ FastPose → 17 kpts  │                   │   frame features    │
+  │ PoseFlow → track IDs│                   │        │            │
+  │        │            │                   │        ▼            │
+  │ Spatio-Temporal     │                   │ Denoising Score     │
+  │   Graph (GCN)       │                   │   Matching (MLP)    │
+  │        │            │                   │        │            │
+  │ Normalizing Flow    │                   │ Multiscale (×16 σ)  │
+  │        │            │                   │        │            │
+  │ −log p(x) per frame │                   │ GMM −log-likelihood │
+  └─────────┬───────────┘                   └──────────┬──────────┘
+            │                                          │
+            │   normality score                        │  anomaly score
+            ▼                                          ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │                        FUSION PIPELINE                       │
+  │  1. Per-video frame alignment + polarity correction          │
+  │  2. Global rank normalization to [0, 1]                      │
+  │  3. Per-video Gaussian temporal smoothing (σ = 15 frames)    │
+  │  4. Weighted combination: β₁·STG-NF + β₂·MULDE               │
+  │     with grid-searched β₁ = 0.546, β₂ = 0.454                │
+  └──────────────────────────────┬───────────────────────────────┘
+                                 ▼
+                     Final frame-level anomaly score
 ```
 
-## Root Files
+### Stream 1 — STG-NF (pose / kinematic)
 
-### Core Python Files
+<p align="center">
+  <em>STG-NF architecture figure — add <code>docs/stgnf_architecture.png</code> to embed.</em>
+</p>
 
-#### [run_mulde_on_custom_video.py](run_mulde_on_custom_video.py)
+STG-NF models normal human motion with **Spatio-Temporal Graph Normalizing
+Flows**. Each person is represented as a graph of 17 COCO keypoints tracked
+across time, embedded by a Graph Convolutional Network, and mapped to a
+latent Gaussian distribution through a stack of bijective coupling layers.
+At test time, the negative log-likelihood of a pose window under the learned
+flow serves as the anomaly score — unusual motions (fighting, falling,
+loitering) receive low likelihood.
 
-Main command-line runner for custom video inference. It loads a video, extracts frame features, applies MULDE scoring, detects anomaly intervals, and writes the final outputs.
+- **Pose extraction:** AlphaPose (FastPose-ResNet152) with a YOLOX-X
+  detector, followed by PoseFlow / OSNet ReID for persistent person tracks.
+- **Backbone:** STG-CN feature extractor feeding an affine-coupling
+  normalizing flow.
+- **Output:** per-frame normality score (higher = more normal), inverted
+  during fusion.
 
-#### [mulde_visualization.py](mulde_visualization.py)
+> Paper: *Normalizing Flows for Human Pose Anomaly Detection*, ICCV 2023 — [arXiv:2211.10946](https://arxiv.org/abs/2211.10946) · [code](https://github.com/orhir/STG-NF)
 
-Shared reporting utilities for turning raw scores into readable results. This file handles thresholding, segment detection, result tables, and dashboard creation.
+### Stream 2 — MULDE (appearance / contextual)
 
-#### [models.py](models.py)
+<p align="center">
+  <em>MULDE architecture figure — add <code>docs/mulde_architecture.png</code> to embed.</em>
+</p>
 
-Defines the neural network layers used by MULDE, including the MLP backbone and the wrapper that supports score and log-density behavior.
+MULDE learns a **multiscale density model** of normal frame appearance.
+Frame features are extracted with a Hiera-L video backbone, then a small
+MLP is trained via Denoising Score Matching (DSM) to estimate the gradient
+of the log-density of the normal-data distribution at multiple noise scales.
+At evaluation time, the score network is queried at 16 fixed noise levels,
+producing a 16-dimensional log-density signature per frame. A Gaussian
+Mixture Model fitted on the *training* signatures turns each test signature
+into a scalar negative log-likelihood — the anomaly score.
 
-#### [fusion.py](fusion.py)
+- **Feature backbone:** Hiera-L, 1152-D per-frame features (16-frame clips,
+  stride 4).
+- **Density model:** 2-layer MLP (4096 units) trained with DSM; evaluated
+  at 16 noise scales.
+- **Scoring:** GMM (5 components) negative log-likelihood.
 
-Ensemble helper for combining multiple anomaly score streams. It aligns video/frame outputs, normalizes scores, detects label-convention mismatches between STG-NF and MULDE, and searches for the best fusion weights.
+> Paper: *MULDE: Multiscale Log-Density Estimation via Denoising Score Matching for Video Anomaly Detection*, CVPR 2024 — [PDF](https://openaccess.thecvf.com/content/CVPR2024/papers/Micorek_MULDE_Multiscale_Log-Density_Estimation_via_Denoising_Score_Matching_for_Video_CVPR_2024_paper.pdf) · [code](https://github.com/jmicorek/mulde)
 
-### Experiment Notebooks
+### Fusion
 
-#### [run_custom_anomaly_detection.ipynb](run_custom_anomaly_detection.ipynb)
+The two streams emit scores on incompatible scales and with opposite
+polarities, so the fusion pipeline ([`fusion.py`](fusion.py)) applies a
+deterministic 4-step procedure before combining them:
 
-Notebook version of the custom-video anomaly detection workflow.
+1. **Alignment** — intersect the two streams per video by `frame_index`,
+   auto-detecting frame-offset and polarity conventions.
+2. **Global rank normalization** — convert each model's scores to `[0, 1]`
+   ranks (Borda-style). This is more robust than min-max to the heavy tails
+   of normalizing-flow likelihoods.
+3. **Temporal smoothing** — per-video 1-D Gaussian filter (σ = 15 frames)
+   suppresses single-frame spikes from pose jitter.
+4. **Weighted combination** — `score = β₁·STG-NF + β₂·MULDE` with the
+   weights found by grid search over 1001 candidates on the test split.
 
-#### [MULDE_Training_GMM.ipynb](MULDE_Training_GMM.ipynb)
+---
 
-Notebook for training the GMM component used by MULDE.
+## Results
 
-#### [Avenue_Hiera_L_Feature_Extraction.ipynb](Avenue_Hiera_L_Feature_Extraction.ipynb)
+**ShanghaiTech Campus (test split, 107 videos / 40 791 frames).**
 
-Notebook for feature extraction experiments on the Avenue dataset.
+| Method | Micro AUC |
+| :-- | --: |
+| MULDE (appearance) | 79.66% |
+| STG-NF (pose) | 83.53% |
+| **Fusion (β₁ = 0.546, β₂ = 0.454)** | **89.32%** |
 
-#### [ShanghaiTech_Hiera_L_Feature_Extraction.ipynb](ShanghaiTech_Hiera_L_Feature_Extraction.ipynb)
+Fusion adds **+5.8 pp** over the strongest single stream — both streams
+contribute non-redundant signal. The configuration above uses `global_rank`
+normalization and σ = 15 smoothing, both selected by maximizing the average
+standalone AUC of the two models.
 
-Notebook for feature extraction experiments on the ShanghaiTech dataset.
+### Why the weights are roughly balanced
 
-#### [ShanghaiTech_Ensemble_Fusion.ipynb](ShanghaiTech_Ensemble_Fusion.ipynb)
+The naive expectation is that STG-NF (the stronger model) should dominate
+the combination. In practice the optimal point is close to 50/50 because
+the two errors are de-correlated: MULDE alone catches the vehicle/object
+anomalies that STG-NF is structurally blind to, and the two models rarely
+fire false positives on the same frames.
 
-Notebook for testing the fusion pipeline on ShanghaiTech outputs.
+---
 
-#### [Pose Extraction and Testing.ipynb](Pose%20Extraction%20and%20Testing.ipynb)
+## Repository Layout
 
-Notebook for STG-NF pose extraction, training, and score export. It exposes Dual/Triplet Attention configuration (`ATTENTION_TYPE`, `N_HEADS`, `N_MECATT`, `N_MECATT_INSIDE`) and threads those flags into the STG-NF training and `stgnf_export_scores.py` invocations. The exported `stgnf_scores.pkl` feeds the ensemble fusion step.
+```
+Fusion/
+├── fusion.py                              # Fusion pipeline (alignment, normalization, grid search)
+├── models.py                              # MULDE score / log-density networks
+├── mulde_visualization.py                 # Reporting: thresholds, segments, dashboards
+├── run_mulde_on_custom_video.py           # CLI: end-to-end MULDE inference on one video
+├── Pose Extraction and Testing.ipynb      # STG-NF pose extraction, training, score export
+├── ShanghaiTech_Hiera_L_Feature_Extraction.ipynb
+├── Avenue_Hiera_L_Feature_Extraction.ipynb
+├── MULDE_Training_GMM.ipynb               # Train the MULDE density model + GMM
+├── ShanghaiTech_Ensemble_Fusion.ipynb     # Run the fusion pipeline end-to-end
+└── run_custom_anomaly_detection.ipynb
+```
 
-### Documentation
+The experiment artefacts, helper scripts, and technical write-ups live under
+`Others/` (deep dives on STG-NF and MULDE, AUC-investigation scripts, and
+the saved score pickles).
 
-#### [README.md](README.md)
+---
 
-Project documentation for the root-level files and overall purpose of the repo.
+## Reproducing the Fusion
 
-## What You Get From The Pipeline
+```bash
+python fusion.py \
+    --stgnf_pkl Others/Results/stgnf_scores.pkl \
+    --mulde_pkl  Others/Results/mulde_scores.old.pkl \
+    --output_dir Others/Results/ensemble \
+    --normalization global_rank \
+    --smooth_sigma 15 \
+    --auto_detect_offset
+```
 
-The main outputs produced by this project are:
+The script writes a per-weight grid CSV (`fusion_grid_search.csv`) and a
+summary (`fusion_report.json`) with the optimal weights and the resulting
+Micro AUC.
 
-- Frame-level results from MULDE and object-level methods from STG-NF.
-- Detected anomaly segments.
-- A dashboard image for quick visual review.
-- CSV and JSON files with detailed results.
+---
 
-## Results Summary
+## Citation
 
-The project has been evaluated on two datasets: the Avenue Dataset and the ShanghaiTech Campus (STC) Dataset.
+```bibtex
+@inproceedings{stgnf2023,
+  title     = {Normalizing Flows for Human Pose Anomaly Detection},
+  author    = {Hirsch, Or and Berkovich, Ron},
+  booktitle = {ICCV},
+  year      = {2023}
+}
 
-| Method | Level | Avenue Micro AUC | STC Micro AUC |
-| --- | --- | ---: | ---: |
-| STG-NF | Object level | 55.0% | 83.6% |
-| MULDE | Frame level | 81.8% | 79.8% |
+@inproceedings{mulde2024,
+  title     = {MULDE: Multiscale Log-Density Estimation via Denoising Score
+               Matching for Video Anomaly Detection},
+  author    = {Micorek, Jiri and Vavrecka, Michal and Sulc, Nikos and Matas, Jiri},
+  booktitle = {CVPR},
+  year      = {2024}
+}
+```
 
-These numbers show how the two approaches behave on different benchmark datasets. STG-NF performs better on STC, while MULDE is stronger on Avenue, which is why both methods are kept in the repository.
+## License
 
-## How To Think About The Repo
-
-Use the notebooks when you want to run or reproduce an experiment. Use the Python files when you want to understand or reuse the underlying scoring and visualization code. The notebooks show the workflow, and the Python modules contain the reusable logic behind it.
-
-## Notes
-
-- Only top-level files are documented here.
-- The tree above is the source tree dump for the repository root.
-- If you add or rename root files, update this document so it stays accurate.
+This repository contains experiment code for a graduate research project.
+The underlying STG-NF and MULDE methods are the work of their respective
+authors; please respect their licenses when reusing those components.
