@@ -19,7 +19,6 @@ The notebooks in the root folder are the main experiment entry points, while the
 ```text
 Fusion/
 ├── Avenue_Hiera_L_Feature_Extraction.ipynb
-├── DA_STG_NF_Pose_Extraction_and_Testing.ipynb
 ├── fusion.py
 ├── models.py
 ├── MULDE_Training_GMM.ipynb
@@ -50,7 +49,7 @@ Defines the neural network layers used by MULDE, including the MLP backbone and 
 
 #### [fusion.py](fusion.py)
 
-Ensemble helper for combining multiple anomaly score streams. It aligns video/frame outputs, normalizes scores, and searches for the best fusion weights.
+Ensemble helper for combining multiple anomaly score streams. It aligns video/frame outputs, normalizes scores, detects label-convention mismatches between STG-NF and MULDE, and searches for the best fusion weights.
 
 ### Experiment Notebooks
 
@@ -74,13 +73,9 @@ Notebook for feature extraction experiments on the ShanghaiTech dataset.
 
 Notebook for testing the fusion pipeline on ShanghaiTech outputs.
 
-#### [DA_STG_NF_Pose_Extraction_and_Testing.ipynb](DA_STG_NF_Pose_Extraction_and_Testing.ipynb)
-
-Notebook for pose extraction and testing experiments.
-
 #### [Pose Extraction and Testing.ipynb](Pose%20Extraction%20and%20Testing.ipynb)
 
-Notebook for pose extraction and evaluation.
+Notebook for STG-NF pose extraction, training, and score export. It exposes Dual/Triplet Attention configuration (`ATTENTION_TYPE`, `N_HEADS`, `N_MECATT`, `N_MECATT_INSIDE`) and threads those flags into the STG-NF training and `stgnf_export_scores.py` invocations. The exported `stgnf_scores.pkl` feeds the ensemble fusion step.
 
 ### Documentation
 

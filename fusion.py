@@ -260,6 +260,9 @@ def align_per_video(
     stats["videos_in_stgnf"] = len(stgnf)
     stats["videos_in_mulde"] = len(mulde)
 
+    # Cross-check label conventions between STG-NF and MULDE before aligning.
+    stats["label_inversion_detected"] = _check_label_inversion(stgnf, mulde)
+
     for video_id in common_videos:
         aligned_v = _align_one_video(
             video_id,
@@ -340,6 +343,49 @@ def _resolve_labels(
             if src_idx.size and (src_idx < arr.shape[0]).all():
                 return arr[src_idx]
     return None
+
+
+def _check_label_inversion(
+    stgnf: Dict[str, dict],
+    mulde: Dict[str, dict],
+) -> bool:
+    """Return True if STG-NF and MULDE labels are exact inverses for every video.
+
+    Emits a single RuntimeWarning when inversion is detected so the user is
+    aware that the two models use different label conventions (e.g. STG-NF
+    labels 0=abomaly while MULDE labels 1=anomaly).
+    """
+    import warnings
+
+    common_videos = sorted(set(stgnf.keys()) & set(mulde.keys()))
+    n_checked = 0
+    n_inverted = 0
+    total_frames = 0
+    for vid in common_videos:
+        s = stgnf[vid]
+        m = mulde[vid]
+        if "labels" not in s or "labels" not in m:
+            continue
+        s_lbl = np.asarray(s["labels"], dtype=np.uint8)
+        m_lbl = np.asarray(m["labels"], dtype=np.uint8)
+        if s_lbl.shape[0] != m_lbl.shape[0]:
+            continue
+        n_checked += 1
+        if np.all(s_lbl == 1 - m_lbl):
+            n_inverted += 1
+            total_frames += int(s_lbl.shape[0])
+
+    if n_inverted == n_checked and n_checked > 0:
+        warnings.warn(
+            f"Label inversion detected: STG-NF and MULDE labels are exact "
+            f"inverses for ALL {n_inverted} checked videos ({total_frames} "
+            f"frames). One model uses 0=abnormal while the other uses "
+            f"1=abnormal. Using MULDE labels (1=anomaly convention).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return True
+    return False
 
 
 def _align_with_auto_offset(
