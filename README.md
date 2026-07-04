@@ -16,11 +16,11 @@ ShanghaiTech Campus benchmark.
 
 **PRISM** = **P**ose + **R**GB **I**ntegration for **S**cene **M**onitoring.
 
-| Method | Stream | Micro AUC (ShanghaiTech) |
-| --- | --- | ---: |
-| MULDE (Hiera-L + DSM) | Appearance | 79.66% |
-| STG-NF (AlphaPose + Flow) | Pose | 83.53% |
-| **Fusion (this repo)** | **Both** | **89.32%** |
+| Method | Stream | Micro AUC (ShanghaiTech) | Micro AUC (Avenue)
+| --- | --- | --- | --- |
+| MULDE (Hiera-L + DSM) | Appearance | 79.7% | 81.3 |
+| STG-NF (AlphaPose + Flow) | Pose | 84% | 57 |
+| **Fusion (this repo)** | **Both** | **89.8%** | |
 
 ---
 
