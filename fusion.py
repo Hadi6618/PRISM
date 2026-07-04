@@ -38,15 +38,114 @@ except Exception:  # pragma: no cover - pandas is a hard requirement
     pd = None  # type: ignore[assignment]
 
 
-DEFAULT_STGNF_PKL = Path(
-    "/content/drive/MyDrive/STG-NF/original_shanghaitech/logs/stgnf_scores.pkl"
-)
-DEFAULT_MULDE_PKL = Path(
-    "/content/drive/MyDrive/MULDE/runs/shanghaitech_hiera_l_mulde/latest/artifacts/mulde_scores.pkl"
-)
-DEFAULT_OUTPUT_DIR = Path(
-    "/content/drive/MyDrive/MULDE/runs/shanghaitech_hiera_l_mulde/latest/ensemble"
-)
+# Per-dataset default paths used by the CLI ``main()`` and by the notebook
+# config. Each entry maps a dataset key to ``(stgnf_pkl, mulde_pkl, output_dir)``
+# Colab Drive paths. Add new datasets here.
+DATASET_PATHS = {
+    "ShanghaiTech": {
+        "stgnf_pkl": Path(
+            "/content/drive/MyDrive/STG-NF/original_shanghaitech/logs/shanghaitech_stgnf_scores_84.pkl"
+        ),
+        "mulde_pkl": Path(
+            "/content/drive/MyDrive/MULDE/runs/shanghaitech_hiera_l_mulde/2026_06_10_04_51_41/artifacts/shanghaitech_mulde_scores_79_7.pkl"
+        ),
+        "output_dir": Path(
+            "/content/drive/MyDrive/Fusion/runs/ShanghaiTech/ensemble"
+        ),
+    },
+    "Avenue": {
+        "stgnf_pkl": Path(
+            "/content/drive/MyDrive/STG-NF/Avenue_dataset/logs/avenue_stgnf_scores_57.pkl"
+        ),
+        "mulde_pkl": Path(
+            "/content/drive/MyDrive/MULDE/runs/avenue_hiera_l_mulde/Final_avenue_scores/artifacts/avenue_mulde_scores_81_4.pkl"
+        ),
+        "output_dir": Path(
+            "/content/drive/MyDrive/Fusion/runs/Avenue/ensemble"
+        ),
+    },
+}
+
+DEFAULT_DATASET = "ShanghaiTech"
+# Backwards-compatible single-path defaults (used when --dataset is not passed).
+DEFAULT_STGNF_PKL = DATASET_PATHS[DEFAULT_DATASET]["stgnf_pkl"]
+DEFAULT_MULDE_PKL = DATASET_PATHS[DEFAULT_DATASET]["mulde_pkl"]
+DEFAULT_OUTPUT_DIR = DATASET_PATHS[DEFAULT_DATASET]["output_dir"]
+
+
+# ---------------------------------------------------------------------------
+# Video-ID aliasing
+# ---------------------------------------------------------------------------
+
+
+def _video_id_alias(video_id: str) -> str:
+    """Map a video ID to a canonical short form so two streams that use
+    different naming conventions can be intersected.
+
+    Handles two conventions:
+
+    * **Avenue**: STG-NF uses ``01_0021`` (scene 01, clip 21) while MULDE
+      uses the clip index ``21``. We therefore treat the *second* token
+      (clip index) as the alias: ``01_0021 -> 21``.
+    * **ShanghaiTech**: both sides already use the same ``01_0014``
+      convention, so no remap is needed (handled by the caller via the
+      direct-overlap short-circuit).
+    * **Bare integers** (e.g. ``01``, ``21``): the integer itself, zero-padded
+      to at least 2 digits, is the alias.
+    """
+    if "_" in video_id:
+        # scene_clip form, e.g. "01_0021" -> clip index "21"
+        parts = video_id.split("_", 1)
+        clip = parts[-1]
+        try:
+            return f"{int(clip):02d}"
+        except ValueError:
+            return clip
+    # Bare form: zero-pad if numeric.
+    try:
+        return f"{int(video_id):02d}"
+    except ValueError:
+        return video_id
+
+
+def _build_video_id_map(stgnf: Dict[str, dict], mulde: Dict[str, dict]) -> Dict[str, str]:
+    """Return ``{mulde_video_id: stgnf_video_id}`` mapping when the two
+    streams use different ID conventions (detected via alias overlap).
+
+    If the two streams already share IDs (e.g. ShanghaiTech), an empty dict is
+    returned and the caller should intersect directly.  Otherwise the mapping
+    lets us relabel one side to the other before alignment.
+    """
+    direct = set(stgnf.keys()) & set(mulde.keys())
+    if direct:
+        return {}
+
+    # Try aliasing: build alias -> stgnf_id and alias -> mulde_id, then match.
+    stgnf_by_alias = {}
+    for vid in stgnf:
+        stgnf_by_alias.setdefault(_video_id_alias(vid), vid)
+    mulde_by_alias = {}
+    for vid in mulde:
+        mulde_by_alias.setdefault(_video_id_alias(vid), vid)
+
+    mapping = {}
+    for alias, mvid in mulde_by_alias.items():
+        if alias in stgnf_by_alias:
+            mapping[mvid] = stgnf_by_alias[alias]
+    return mapping
+
+
+def _apply_video_id_map(scores: Dict[str, dict], mapping: Dict[str, str]) -> Dict[str, dict]:
+    """Return a copy of *scores* with video IDs renamed per *mapping*.
+
+    Only keys present in *mapping* are renamed; others are left as-is.
+    """
+    if not mapping:
+        return scores
+    out = {}
+    for vid, entry in scores.items():
+        out[mapping.get(vid, vid)] = entry
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +311,7 @@ def align_per_video(
     auto_detect_offset: bool = False,
     stgnf_score_mode: str = "auto",
     offset_candidates: Tuple[int, ...] = (-2, -1, 0, 1, 2),
+    apply_id_alias: bool = True,
 ) -> Tuple[List[AlignedVideo], dict]:
     """Intersect STG-NF and MULDE per video without applying normalization.
 
@@ -230,18 +330,31 @@ def align_per_video(
     * ``"anomaly"``  - larger STG-NF values mean more abnormal.
     * ``"normality"`` - larger STG-NF values mean more normal and are inverted.
     * ``"auto"``      - try both and keep whichever yields the higher AUC.
+
+    ``apply_id_alias`` detects when STG-NF and MULDE use different video-ID
+    conventions (e.g. Avenue: STG-NF ``01_0001`` vs MULDE ``01``) and remaps
+    MULDE IDs to STG-NF IDs before alignment. Set to False to disable.
     """
     if stgnf_score_mode not in ("auto", "anomaly", "normality"):
         raise ValueError(
             "Unknown stgnf_score_mode: "
             f"{stgnf_score_mode!r}. Valid options: ('auto', 'anomaly', 'normality')"
         )
+
+    # Auto-detect and apply video-ID aliases (e.g. Avenue 01_0001 <-> 01).
+    id_mapping = {}
+    if apply_id_alias:
+        id_mapping = _build_video_id_map(stgnf, mulde)
+    if id_mapping:
+        mulde = _apply_video_id_map(mulde, id_mapping)
+
     if auto_detect_offset or stgnf_score_mode == "auto":
         return _align_with_auto_offset(
             stgnf,
             mulde,
             offset_candidates,
             stgnf_score_mode=stgnf_score_mode,
+            id_mapping=id_mapping,
         )
 
     aligned: List[AlignedVideo] = []
@@ -393,6 +506,7 @@ def _align_with_auto_offset(
     mulde: Dict[str, dict],
     offset_candidates: Tuple[int, ...],
     stgnf_score_mode: str = "auto",
+    id_mapping: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[AlignedVideo], dict]:
     """Search the supplied offset candidates and return the best one.
 
@@ -400,6 +514,9 @@ def _align_with_auto_offset(
     intersected frames. This is robust to the 0-based vs 1-based
     ``frame_index`` mismatch that typically appears when the STG-NF and MULDE
     pipelines were written by different authors.
+
+    ``id_mapping`` (optional) is recorded into the returned stats so callers
+    know whether video IDs were remapped.
     """
     best: Optional[Tuple[int, str, List[AlignedVideo], dict, float, int]] = None
     candidate_stats: Dict[str, dict] = {}
@@ -450,12 +567,16 @@ def _align_with_auto_offset(
 
     if best is None:
         # Fall back to offset 0 with an empty alignment rather than crash.
-        return align_per_video(
+        aligned, stats = align_per_video(
             stgnf,
             mulde,
             stgnf_frame_offset=0,
             stgnf_score_mode="normality",
+            apply_id_alias=False,
         )
+        if id_mapping:
+            stats["video_id_mapping_applied"] = len(id_mapping)
+        return aligned, stats
 
     chosen_offset, chosen_mode, aligned, _, best_auc, _ = best
     aligned, stats = align_per_video(
@@ -463,9 +584,12 @@ def _align_with_auto_offset(
         mulde,
         stgnf_frame_offset=chosen_offset,
         stgnf_score_mode=chosen_mode,
+        apply_id_alias=False,
     )
     stats["stgnf_frame_offset"] = int(chosen_offset)
     stats["stgnf_score_mode"] = chosen_mode
+    if id_mapping:
+        stats["video_id_mapping_applied"] = len(id_mapping)
     stats["auto_detect"] = {
         "candidates": list(offset_candidates),
         "stgnf_micro_auc_per_candidate": candidate_stats,
@@ -772,9 +896,21 @@ def write_outputs(
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stgnf_pkl", type=Path, default=DEFAULT_STGNF_PKL)
-    parser.add_argument("--mulde_pkl", type=Path, default=DEFAULT_MULDE_PKL)
-    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        choices=list(DATASET_PATHS.keys()),
+        help=(
+            "Dataset key. When set, the STG-NF / MULDE / output paths default "
+            f"to the configured {list(DATASET_PATHS.keys())} locations and can "
+            "still be overridden by the explicit flags below."
+        ),
+    )
+    # Use sentinel defaults; actual defaults are resolved from --dataset below.
+    parser.add_argument("--stgnf_pkl", type=Path, default=None)
+    parser.add_argument("--mulde_pkl", type=Path, default=None)
+    parser.add_argument("--output_dir", type=Path, default=None)
     parser.add_argument(
         "--normalization",
         type=str,
@@ -854,6 +990,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
 
+    # Resolve dataset-keyed defaults if explicit paths were not provided.
+    dataset_cfg = DATASET_PATHS.get(args.dataset or DEFAULT_DATASET)
+    if args.stgnf_pkl is None:
+        args.stgnf_pkl = dataset_cfg["stgnf_pkl"]
+    if args.mulde_pkl is None:
+        args.mulde_pkl = dataset_cfg["mulde_pkl"]
+    if args.output_dir is None:
+        args.output_dir = dataset_cfg["output_dir"]
+
+    print(f"Dataset: {args.dataset or DEFAULT_DATASET}")
     print(f"Loading STG-NF scores from: {args.stgnf_pkl}")
     stgnf, stgnf_meta = load_score_pickle(args.stgnf_pkl)
     print(f"Loading MULDE scores from:  {args.mulde_pkl}")
@@ -868,12 +1014,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     chosen_offset = align_stats.get("stgnf_frame_offset", 0)
     chosen_mode = align_stats.get("stgnf_score_mode", args.stgnf_score_mode)
+    n_remapped = align_stats.get("video_id_mapping_applied", 0)
     print(
         f"Aligned {align_stats['videos_aligned']} videos "
         f"(STG-NF={align_stats['videos_in_stgnf']}, "
         f"MULDE={align_stats['videos_in_mulde']}, "
         f"stgnf_frame_offset={chosen_offset}, "
-        f"stgnf_score_mode={chosen_mode})."
+        f"stgnf_score_mode={chosen_mode}"
+        + (f", video_ids_remapped={n_remapped}" if n_remapped else "")
+        + ")."
     )
     if "auto_detect" in align_stats:
         for key, payload in align_stats["auto_detect"]["stgnf_micro_auc_per_candidate"].items():
@@ -929,6 +1078,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     beta_1_values = list(np.round(np.arange(0.0, 1.0 + 1e-9, args.beta_1_step), 6))
     results, best, summary = grid_search_fusion(aligned, beta_1_values=beta_1_values)
+    summary["dataset"] = args.dataset or DEFAULT_DATASET
     summary["normalization"] = args.normalization
     summary["smooth_sigma"] = chosen_sigma
     if sigma_search_results:
