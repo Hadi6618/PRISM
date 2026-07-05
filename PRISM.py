@@ -1,4 +1,4 @@
-"""Ensemble fusion for STG-NF + MULDE (PRISM) on the ShanghaiTech Campus
+"""Ensemble PRISM for STG-NF + MULDE (PRISM) on the ShanghaiTech Campus
 and Avenue test sets.
 
 Loads a STG-NF score pickle (pose/object-level stream) and a MULDE score
@@ -17,8 +17,8 @@ pickle (frame-level stream), then:
 
 The script can be imported as a module or run from the command line::
 
-    python fusion.py --dataset ShanghaiTech --smooth_sigma_search --auto_detect_offset
-    python fusion.py --dataset Avenue      --smooth_sigma_search --auto_detect_offset
+    python PRISM.py --dataset ShanghaiTech --smooth_sigma_search --auto_detect_offset
+    python PRISM.py --dataset Avenue      --smooth_sigma_search --auto_detect_offset
 """
 
 from __future__ import annotations
