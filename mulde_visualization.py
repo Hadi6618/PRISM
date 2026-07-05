@@ -198,8 +198,13 @@ def generate_anomaly_dashboard(
     output_path: str | Path,
     manual_frame_ranges: list[tuple[int, int]] | None = None,
     threshold_method: str = "mad",
+    model_name: str = "MULDE",
 ) -> Path:
-    """Save a multi-panel anomaly report figure."""
+    """Save a multi-panel anomaly report figure.
+
+    ``model_name`` only controls the figure title; MULDE is the default and
+    preserves the original behavior.
+    """
     output_path = Path(output_path)
     times = df["timestamp_sec"].to_numpy()
     raw_nll = df["anomaly_score_raw"].to_numpy()
@@ -228,7 +233,7 @@ def generate_anomaly_dashboard(
     )
     ax_score.set_ylabel("Anomaly score\n(−log-likelihood, ↑ = more anomalous)")
     ax_score.set_title(
-        f"MULDE Anomaly Report — {video_name}\n"
+        f"{model_name} Anomaly Report — {video_name}\n"
         f"{len(segments)} detected segment(s) · {duration_sec:.2f}s @ {fps:.2f} FPS",
         fontsize=13,
         fontweight="bold",
@@ -277,11 +282,19 @@ def save_anomaly_artifacts(
     threshold_method: str,
     smooth_sigma: float,
     dashboard_path: Path,
+    model_name: str = "MULDE",
 ) -> dict[str, Path]:
-    """Write CSV, interval table, and summary JSON."""
+    """Write CSV, interval table, and summary JSON.
+
+    The per-frame scores CSV is tagged with the lowercased ``model_name``
+    (e.g. ``<video>_mulde_scores.csv``, ``<video>_stgnf_scores.csv``) so
+    outputs from different models on the same video do not clobber each
+    other. The interval/summary filenames remain shared.
+    """
     output_dir = Path(output_dir)
+    score_suffix = model_name.lower().replace("-", "")
     paths = {
-        "scores_csv": output_dir / f"{video_name}_mulde_scores.csv",
+        "scores_csv": output_dir / f"{video_name}_{score_suffix}_scores.csv",
         "intervals_csv": output_dir / f"{video_name}_anomaly_intervals.csv",
         "summary_json": output_dir / f"{video_name}_anomaly_summary.json",
         "dashboard_png": dashboard_path,
@@ -308,6 +321,7 @@ def save_anomaly_artifacts(
     intervals_df.to_csv(paths["intervals_csv"], index=False)
 
     summary = {
+        "model_name": model_name,
         "video_name": video_name,
         "fps": float(fps),
         "num_frames": int(len(df)),

@@ -1,21 +1,24 @@
-"""Ensemble fusion for STG-NF + MULDE on the ShanghaiTech Campus test set.
+"""Ensemble fusion for STG-NF + MULDE (PRISM) on the ShanghaiTech Campus
+and Avenue test sets.
 
-Implements Steps 3 and 4 of ``ensemble_handoff.md``:
+Loads a STG-NF score pickle (pose/object-level stream) and a MULDE score
+pickle (frame-level stream), then:
 
-* Loads ``stgnf_scores.pkl`` (pose/object-level stream) and ``mulde_scores.pkl``
-  (frame-level stream) emitted by the two evaluation notebooks.
-* Aligns the two streams per video by ``(video_id, frame_index)`` and applies
-  **per-video** Min-Max scaling to both models so they live on a common
-  ``[0.0, 1.0]`` range.
+* Aligns the two streams per video by ``(video_id, frame_index)``. Video-ID
+  conventions are auto-detected and remapped (Avenue: ``01_0001 <-> 21``).
+* Applies the requested score normalization so both streams live on
+  ``[0.0, 1.0]``.
+* Grid-searches an **independent** Gaussian smoothing sigma per model
+  (``sigma_stgnf``, ``sigma_mulde``). This is preferable to a single shared
+  sigma because the two streams have different noise profiles: STG-NF scores
+  are pre-smoothed by their eval pipeline while MULDE scores are raw.
 * Runs a grid search over ``beta_1`` (STG-NF weight) and ``beta_2 = 1 - beta_1``
   (MULDE weight) and reports the maximum Micro AUC plus the optimal weights.
 
 The script can be imported as a module or run from the command line::
 
-    python fusion.py --stgnf_pkl ... --mulde_pkl ... --output_dir ...
-
-When run with no arguments it uses the default Colab paths described at the
-top of ``ensemble_handoff.md``.
+    python fusion.py --dataset ShanghaiTech --smooth_sigma_search --auto_detect_offset
+    python fusion.py --dataset Avenue      --smooth_sigma_search --auto_detect_offset
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -598,92 +600,9 @@ def _align_with_auto_offset(
     return aligned, stats
 
 
-# Backwards-compatible alias: keeps the old name pointing at the new
-# per-video alignment helper so existing callers keep working.
-align_and_normalize = align_per_video
-
-
 # ---------------------------------------------------------------------------
 # Gaussian temporal smoothing
 # ---------------------------------------------------------------------------
-
-
-def smooth_scores(
-    aligned: List[AlignedVideo],
-    sigma: float,
-) -> List[AlignedVideo]:
-    """Apply a 1-D Gaussian filter to STG-NF and MULDE scores independently.
-
-    The filter is applied **per video** so that anomalies at video boundaries
-    do not bleed across videos. ``sigma`` is in units of frames.
-
-    A sigma of 0 means no smoothing (identity operation).
-    """
-    if sigma <= 0.0:
-        return aligned
-    for v in aligned:
-        v.stgnf_scores = gaussian_filter1d(
-            v.stgnf_scores.astype(np.float64), sigma=sigma
-        ).astype(np.float32)
-        v.mulde_scores = gaussian_filter1d(
-            v.mulde_scores.astype(np.float64), sigma=sigma
-        ).astype(np.float32)
-    return aligned
-
-
-def search_best_sigma(
-    aligned: List[AlignedVideo],
-    sigma_candidates: Tuple[float, ...] = (0, 1, 2, 3, 4, 5, 6, 8, 10, 15),
-    normalization: Optional[str] = None,
-) -> Tuple[float, dict]:
-    """Grid-search over sigma values to maximise per-model standalone AUC.
-
-    For each candidate sigma we:
-    1. Apply the requested normalization (if provided).
-    2. Smooth both model streams.
-    3. Compute the Micro AUC for STG-NF alone and MULDE alone.
-    4. Pick the sigma that maximises ``(stgnf_auc + mulde_auc) / 2``.
-
-    Returns the best sigma and a dict of per-candidate results.
-    """
-    import copy
-
-    best_sigma = 0.0
-    best_avg_auc = -1.0
-    sigma_results: dict = {}
-
-    for sigma in sigma_candidates:
-        # Deep-copy so we do not mutate the original aligned list.
-        trial = copy.deepcopy(aligned)
-        if normalization is not None:
-            trial = apply_normalization(trial, strategy=normalization)
-        trial = smooth_scores(trial, sigma=sigma)
-
-        all_stgnf = np.concatenate([v.stgnf_scores for v in trial])
-        all_mulde = np.concatenate([v.mulde_scores for v in trial])
-        all_labels = np.concatenate([v.labels for v in trial])
-
-        if len(np.unique(all_labels)) < 2:
-            sigma_results[sigma] = {"stgnf_auc": None, "mulde_auc": None, "avg_auc": None}
-            continue
-
-        stgnf_auc = float(roc_auc_score(all_labels, all_stgnf))
-        mulde_auc = float(roc_auc_score(all_labels, all_mulde))
-        avg_auc = (stgnf_auc + mulde_auc) / 2.0
-        sigma_results[float(sigma)] = {
-            "stgnf_auc": round(stgnf_auc, 6),
-            "mulde_auc": round(mulde_auc, 6),
-            "avg_auc": round(avg_auc, 6),
-        }
-        print(
-            f"  sigma={sigma:5.1f}  STG-NF AUC={stgnf_auc*100:.4f}%"
-            f"  MULDE AUC={mulde_auc*100:.4f}%  avg={avg_auc*100:.4f}%"
-        )
-        if avg_auc > best_avg_auc:
-            best_avg_auc = avg_auc
-            best_sigma = float(sigma)
-
-    return best_sigma, sigma_results
 
 
 def smooth_scores_independent(
@@ -724,7 +643,8 @@ def search_best_sigma_independent(
     3. Compute the Micro AUC for each model alone.
     4. Pick the pair that maximises ``(stgnf_auc + mulde_auc) / 2``.
 
-    Returns ``(best_sigma_stgnf, best_sigma_mulde)`` and a results dict.
+    Returns ``(best_sigma_stgnf, best_sigma_mulde)`` and a results dict whose
+    keys are ``"sigma_stgnf|sigma_mulde"`` strings (JSON-safe).
     """
     import copy
 
@@ -761,7 +681,7 @@ def search_best_sigma_independent(
                 best_avg_auc = avg_auc
                 best_pair = (float(s_stgnf), float(s_mulde))
 
-    # Print summary: top-10 pairs by avg AUC.
+    # Print summary: top-15 pairs by avg AUC.
     sorted_pairs = sorted(results.items(), key=lambda x: x[1].get("avg_auc") or -1, reverse=True)
     print(f"  Independent sigma search: {len(sigma_candidates)}x{len(sigma_candidates)} = "
           f"{len(sigma_candidates)**2} combinations")
@@ -776,7 +696,12 @@ def search_best_sigma_independent(
         marker = " <--" if (ss, sm) == best_pair else ""
         print(f"  {ss:7.1f}  {sm:7.1f}  {sa_s:>10s}  {ma_s:>10s}  {aa_s:>10s}{marker}")
 
-    return best_pair, results
+    # JSON cannot serialize tuple keys, so return a parallel dict with
+    # string keys of the form "σ_stgnf|σ_mulde" for reporting.
+    results_serializable = {
+        f"{ss}|{sm}": r for (ss, sm), r in results.items()
+    }
+    return best_pair, results_serializable
 
 
 VALID_NORMALIZATIONS = (
@@ -1007,14 +932,13 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--normalization",
         type=str,
-        default="global_minmax",
+        default="global_rank",
         choices=VALID_NORMALIZATIONS,
         help=(
-            "Score normalization strategy. The handoff plan asks for "
-            "per_video_minmax but in practice that destroys the global "
-            "ranking and yields a worse Micro AUC than either model alone. "
-            "The default (global_minmax) preserves the absolute anomaly "
-            "scale while still binding both models to [0, 1]."
+            "Score normalization strategy. global_rank (default) converts each "
+            "model's raw scores to [0, 1] percentiles (Borda-style) and is the "
+            "most robust to the heavy-tailed normalizing-flow likelihoods. See "
+            "VALID_NORMALIZATIONS for alternatives."
         ),
     )
     parser.add_argument(
@@ -1024,23 +948,32 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Step size for the beta_1 grid (default: 0.01 -> 101 points in [0, 1]).",
     )
     parser.add_argument(
-        "--smooth_sigma",
-        type=float,
-        default=3.0,
-        help=(
-            "Gaussian smoothing sigma (in frames) applied to both STG-NF and "
-            "MULDE scores per video before normalization. Set to 0 to disable. "
-            "Default: 3.0 (matches MULDE training pipeline). Use "
-            "--smooth_sigma_search to auto-select the best sigma."
-        ),
-    )
-    parser.add_argument(
         "--smooth_sigma_search",
         action="store_true",
         help=(
-            "Grid-search over sigma in {0,1,2,3,4,5,6,8,10} and pick the value "
-            "that maximises the average of STG-NF and MULDE standalone AUC. "
-            "Overrides --smooth_sigma."
+            "Grid-search the independent (sigma_stgnf, sigma_mulde) pair that "
+            "maximises the average of STG-NF and MULDE standalone AUC. This is "
+            "the recommended mode: the two streams have different noise profiles "
+            "(STG-NF scores are pre-smoothed by the eval pipeline, MULDE scores "
+            "are raw) so a single shared sigma is a compromise."
+        ),
+    )
+    parser.add_argument(
+        "--smooth_sigma_stgnf",
+        type=float,
+        default=0.0,
+        help=(
+            "Manual Gaussian sigma (frames) for the STG-NF stream. Ignored when "
+            "--smooth_sigma_search is set. Set to 0 for no smoothing."
+        ),
+    )
+    parser.add_argument(
+        "--smooth_sigma_mulde",
+        type=float,
+        default=0.0,
+        help=(
+            "Manual Gaussian sigma (frames) for the MULDE stream. Ignored when "
+            "--smooth_sigma_search is set. Set to 0 for no smoothing."
         ),
     )
     parser.add_argument(
@@ -1141,20 +1074,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ---- Gaussian temporal smoothing ----------------------------------------
     sigma_search_results: dict = {}
     if args.smooth_sigma_search:
-        print("\nSearching for best Gaussian smoothing sigma ...")
-        # Pass normalization=None since it is already applied
-        chosen_sigma, sigma_search_results = search_best_sigma(
+        print("\nSearching for best Gaussian smoothing (sigma_stgnf, sigma_mulde) ...")
+        # Pass normalization=None since it is already applied above.
+        chosen_pair, sigma_search_results = search_best_sigma_independent(
             aligned, normalization=None
         )
-        print(f"Best sigma = {chosen_sigma} (maximises avg standalone AUC)")
+        chosen_sigma_stgnf, chosen_sigma_mulde = chosen_pair
+        print(
+            f"Best independent sigma = ({chosen_sigma_stgnf}, {chosen_sigma_mulde})"
+            " (maximises avg standalone AUC)"
+        )
     else:
-        chosen_sigma = args.smooth_sigma
+        chosen_sigma_stgnf = float(args.smooth_sigma_stgnf)
+        chosen_sigma_mulde = float(args.smooth_sigma_mulde)
 
-    if chosen_sigma > 0:
-        aligned = smooth_scores(aligned, sigma=chosen_sigma)
-        print(f"Gaussian smoothing sigma:   {chosen_sigma}")
-    else:
-        print("Gaussian smoothing:         disabled (sigma=0)")
+    aligned = smooth_scores_independent(
+        aligned, sigma_stgnf=chosen_sigma_stgnf, sigma_mulde=chosen_sigma_mulde,
+    )
+    print(
+        f"Gaussian smoothing sigma:   STG-NF={chosen_sigma_stgnf}  MULDE={chosen_sigma_mulde}"
+    )
     # -------------------------------------------------------------------------
 
     # Quick per-model Micro AUC snapshot for diagnostics.
@@ -1173,7 +1112,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     results, best, summary = grid_search_fusion(aligned, beta_1_values=beta_1_values)
     summary["dataset"] = args.dataset or DEFAULT_DATASET
     summary["normalization"] = args.normalization
-    summary["smooth_sigma"] = chosen_sigma
+    summary["smooth_sigma_stgnf"] = chosen_sigma_stgnf
+    summary["smooth_sigma_mulde"] = chosen_sigma_mulde
     if sigma_search_results:
         summary["sigma_search"] = sigma_search_results
     write_outputs(
