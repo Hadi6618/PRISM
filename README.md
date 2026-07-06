@@ -19,7 +19,7 @@ scores yields a substantial improvement over either model alone.
 | :-- | :-- | ---: | ---: |
 | MULDE (Hiera-L + DSM) | Appearance | 79.7% | 81.4% |
 | STG-NF (AlphaPose + Flow) | Pose | 84% | 57.0% |
-| **PRISM (fusion)** | **Both** | **89.9%** | 82.8 |
+| **PRISM (fusion)** | **Both** | **89.9%** | **82.8%** |
 
 ---
 
@@ -96,7 +96,7 @@ loitering) receive low likelihood.
 
 - **Pose extraction:** AlphaPose (FastPose-ResNet152) with a YOLOX-X
   detector, followed by PoseFlow / OSNet ReID for persistent person tracks.
-- **Backbone:** STG-CN feature extractor feeding an affine-coupling
+- **Backbone:** ST-GCN feature extractor feeding an affine-coupling
   normalizing flow.
 - **Output:** per-frame normality score (higher = more normal), inverted
   during fusion.
@@ -127,7 +127,7 @@ into a scalar negative log-likelihood — the anomaly score.
 > Matching for Video Anomaly Detection*, CVPR 2024 —
 > [PDF](https://openaccess.thecvf.com/content/CVPR2024/papers/Micorek_MULDE_Multiscale_Log-Density_Estimation_via_Denoising_Score_Matching_for_Video_CVPR_2024_paper.pdf) ·
 > [forked code](https://github.com/Hadi6618/MULDE)
-> [original code](https://github.com/jmicorek/mulde)
+> [original code](https://github.com/jakubmicorek/MULDE-Multiscale-Log-Density-Estimation-via-Denoising-Score-Matching-for-Video-Anomaly-Detection)
 
 ### PRISM
 
@@ -254,6 +254,18 @@ PRISM/
 ├── MUDLE.ipynb                           # Colab: train the MULDE density model + GMM on Hiera-L features
 ├── PRISM_Test.ipynb                      # Colab: end-to-end anomaly detection on a single custom video
 ```
+
+---
+
+## Related Repositories
+
+PRISM is the top-level project that orchestrates two independently maintained subprojects:
+
+| Repository | Role | URL |
+| :-- | :-- | :-- |
+| **PRISM** (this repo) | Fusion pipeline, Colab orchestration, documentation | [Hadi6618/PRISM](https://github.com/Hadi6618/PRISM) |
+| **STG-NF** | Pose stream — Spatio-Temporal Graph Normalizing Flows | [Hadi6618/STG-NF](https://github.com/Hadi6618/STG-NF) (fork of [orhir/STG-NF](https://github.com/orhir/STG-NF)) |
+| **MULDE** | Appearance stream — Multiscale Log-Density Estimation via DSM | [Hadi6618/MULDE](https://github.com/Hadi6618/MULDE) (fork of [jakubmicorek/MULDE](https://github.com/jakubmicorek/MULDE-Multiscale-Log-Density-Estimation-via-Denoising-Score-Matching-for-Video-Anomaly-Detection)) |
 
 ---
 
