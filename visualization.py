@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Literal
 
-import cv2
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -492,6 +491,8 @@ def generate_annotated_video(
     video_path = Path(video_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import cv2  # local import — only needed for video output, not score charts
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
