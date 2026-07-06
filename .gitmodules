@@ -1,0 +1,6 @@
+[submodule "MULDE"]
+	path = MULDE
+	url = https://github.com/Hadi6618/MULDE
+[submodule "STG-NF"]
+	path = STG-NF
+	url = https://github.com/Hadi6618/STG-NF

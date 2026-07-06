@@ -341,10 +341,21 @@ def save_anomaly_artifacts(
     return paths
 
 
-def print_anomaly_report(segments: list[dict], fps: float, threshold: float, threshold_method: str) -> None:
-    """Print a human-readable summary to stdout."""
+def print_anomaly_report(
+    segments: list[dict],
+    fps: float,
+    threshold: float,
+    threshold_method: str,
+    *,
+    model_name: str = "MULDE",
+) -> None:
+    """Print a human-readable summary to stdout.
+
+    ``model_name`` only affects the header text; MULDE is the default and
+    preserves the original behavior.
+    """
     print(f"\n{'=' * 60}")
-    print("MULDE ANOMALY DETECTION SUMMARY")
+    print(f"{model_name.upper()} ANOMALY DETECTION SUMMARY")
     print(f"{'=' * 60}")
     print(f"FPS: {fps:.3f}  |  Threshold ({threshold_method}): {threshold:.4f}")
     print(f"Detected segments: {len(segments)}")

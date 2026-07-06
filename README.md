@@ -73,7 +73,7 @@ aligned, normalised, and fused at the **frame level** (late fusion).
             │   normality score                        │  anomaly score
             ▼                                          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │                        FUSION PIPELINE                       │
+  │                        PRISM PIPELINE                       │
   │  1. Per-video frame alignment + polarity correction          │
   │     (auto-detects offset, score polarity, video-ID aliases) │
   │  2. Global rank normalization to [0, 1]                      │
@@ -103,7 +103,8 @@ loitering) receive low likelihood.
 
 > Paper: *Normalizing Flows for Human Pose Anomaly Detection*, ICCV 2023 —
 > [arXiv:2211.10946](https://arxiv.org/abs/2211.10946) ·
-> [code](https://github.com/orhir/STG-NF)
+> [forked code](https://github.com/Hadi6618/STG-NF)
+> [original code](https://github.com/orhir/STG-NF)
 
 ### Stream 2 — MULDE (appearance / contextual)
 
@@ -125,12 +126,13 @@ into a scalar negative log-likelihood — the anomaly score.
 > Paper: *MULDE: Multiscale Log-Density Estimation via Denoising Score
 > Matching for Video Anomaly Detection*, CVPR 2024 —
 > [PDF](https://openaccess.thecvf.com/content/CVPR2024/papers/Micorek_MULDE_Multiscale_Log-Density_Estimation_via_Denoising_Score_Matching_for_Video_CVPR_2024_paper.pdf) ·
-> [code](https://github.com/jmicorek/mulde)
+> [forked code](https://github.com/Hadi6618/MULDE)
+> [original code](https://github.com/jmicorek/mulde)
 
-### Fusion
+### PRISM
 
 The two streams emit scores on incompatible scales and with opposite
-polarities, so the fusion pipeline ([`fusion.py`](fusion.py)) applies a
+polarities, so the PRISM pipeline ([`PRISM.py`](PRISM.py)) applies a
 deterministic 4-step procedure before combining them:
 
 1. **Alignment** — intersect the two streams per video by `frame_index`,
@@ -152,7 +154,7 @@ deterministic 4-step procedure before combining them:
 | :-- | --: | --: | :-- |
 | **ShanghaiTech Campus** | 107 | 40 791 | Both streams share `01_0014`-style video IDs. |
 | **Avenue** | 21 | — | STG-NF uses `01_0021` (scene_clip); MULDE uses the clip
-  index `21`. The fusion pipeline remaps these automatically. |
+  index `21`. The PRISM pipeline remaps these automatically. |
 
 Both datasets are supported by the notebook and the CLI via a `--dataset`
 flag or a single `DATASET` variable in the notebook config cell.
@@ -184,7 +186,7 @@ models rarely fire false positives on the same frames.
 | **PRISM** | — |
 
 Avenue results are computed by setting `DATASET = 'Avenue'` in the notebook
-or passing `--dataset Avenue` to `fusion.py`. The Avenue AUC gain is expected
+or passing `--dataset Avenue` to `PRISM.py`. The Avenue AUC gain is expected
 to be larger than ShanghaiTech because STG-NF is much weaker relative to
 MULDE on Avenue, so MULDE dominates the fusion and the pose stream acts
 purely as a noisy supplement.
@@ -193,11 +195,11 @@ purely as a noisy supplement.
 
 ## Quick Start (Google Colab)
 
-The recommended way to run the fusion is via the provided Colab notebook
+The recommended way to run the PRISM is via the provided Colab Notebook
 which handles environment setup, Drive mounting, and result persistence
 automatically.
 
-1. Open [`ShanghaiTech_Ensemble_Fusion.ipynb`](ShanghaiTech_Ensemble_Fusion.ipynb)
+1. Open [`PRISM_Runner.ipynb`](PRISM_Runner.ipynb)
    in Colab.
 2. In the **Dataset selection** cell, set `DATASET` to `'ShanghaiTech'` or
    `'Avenue'`.
@@ -205,24 +207,24 @@ automatically.
    `/content/drive/MyDrive/Fusion/runs/<dataset>/ensemble/`.
 
 The default Colab Drive paths for both datasets are pre-configured in the
-notebook and in `fusion.py` ([`DATASET_PATHS`](fusion.py)). Edit them only if
+notebook and in `PRISM.py` ([`DATASET_PATHS`](PRISM.py)). Edit them only if
 your Drive layout differs.
 
 ---
 
 ## CLI Usage
 
-`fusion.py` can also be invoked directly from the command line. On Colab:
+`PRISM.py` can also be invoked directly from the command line. On Colab:
 
 ```bash
 # ShanghaiTech (default dataset)
-python fusion.py --dataset ShanghaiTech \
+python PRISM.py --dataset ShanghaiTech \
     --normalization global_rank \
     --smooth_sigma 15 \
     --auto_detect_offset
 
 # Avenue
-python fusion.py --dataset Avenue \
+python PRISM.py --dataset Avenue \
     --normalization global_rank \
     --smooth_sigma_search \
     --auto_detect_offset
@@ -235,7 +237,7 @@ flags to override the default Drive paths for any dataset.
 Locally (without Colab Drive):
 
 ```bash
-python fusion.py \
+python PRISM.py \
     --stgnf_pkl Others/Results/stgnf_scores.pkl \
     --mulde_pkl  Others/Results/mulde_scores.old.pkl \
     --output_dir Others/Results/ensemble \
@@ -257,20 +259,15 @@ The script writes:
 
 ```
 PRISM/
-├── fusion.py                              # Fusion pipeline (alignment, normalization, grid search)
-├── models.py                              # MULDE score / log-density networks
-├── mulde_visualization.py                 # Reporting: thresholds, segments, dashboards
-├── run_mulde_on_custom_video.py           # CLI: end-to-end MULDE inference on one video
-│
-├── ShanghaiTech_Ensemble_Fusion.ipynb     # Colab: fusion on ShanghaiTech OR Avenue (set DATASET)
-├── Pose Extraction and Testing.ipynb       # STG-NF pose extraction, training, score export
-├── ShanghaiTech_Hiera_L_Feature_Extraction.ipynb
-├── Avenue_Hiera_L_Feature_Extraction.ipynb
-├── MULDE_Training_GMM.ipynb               # Train the MULDE density model + GMM
-├── run_custom_anomaly_detection.ipynb     # Notebook: end-to-end MULDE on a single video
+├── PRISM.py                              # PRISM pipeline (alignment, normalization, grid search)
+├── visualization.py                      # Reporting: thresholds, segments, dashboards
+├── PRISM_Runner.ipynb                    # Colab: fuse STG-NF + MULDE scores on ShanghaiTech OR Avenue
+├── STG-NF.ipynb                          # Colab: STG-NF pose extraction, training, score export
+├── MUDLE.ipynb                           # Colab: train the MULDE density model + GMM on Hiera-L features
+├── PRISM_Test.ipynb                      # Colab: end-to-end anomaly detection on a single custom video
 │
 └── Others/
-    ├── Results/                           # Saved score pickles, fusion reports
+    ├── Results/                           # Saved score pickles, fusion reports, feature stats
     ├── Agent Plans/                       # Design documents
     ├── Helpful Codes for Agents/          # Diagnostic and test scripts
     ├── Utils/                             # Small helpers for data inspection
