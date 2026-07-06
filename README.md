@@ -234,18 +234,6 @@ Use `--smooth_sigma_search` to automatically grid-search the best temporal
 smoothing window. Pass explicit `--stgnf_pkl` / `--mulde_pkl` / `--output_dir`
 flags to override the default Drive paths for any dataset.
 
-Locally (without Colab Drive):
-
-```bash
-python PRISM.py \
-    --stgnf_pkl Others/Results/stgnf_scores.pkl \
-    --mulde_pkl  Others/Results/mulde_scores.old.pkl \
-    --output_dir Others/Results/ensemble \
-    --normalization global_rank \
-    --smooth_sigma 15 \
-    --auto_detect_offset
-```
-
 The script writes:
 
 | File | Content |
@@ -265,14 +253,6 @@ PRISM/
 ├── STG-NF.ipynb                          # Colab: STG-NF pose extraction, training, score export
 ├── MUDLE.ipynb                           # Colab: train the MULDE density model + GMM on Hiera-L features
 ├── PRISM_Test.ipynb                      # Colab: end-to-end anomaly detection on a single custom video
-│
-└── Others/
-    ├── Results/                           # Saved score pickles, fusion reports, feature stats
-    ├── Agent Plans/                       # Design documents
-    ├── Helpful Codes for Agents/          # Diagnostic and test scripts
-    ├── Utils/                             # Small helpers for data inspection
-    ├── stgnf_deep_dive.md                 # Technical write-up: how STG-NF works
-    └── mulde_deep_dive.md                 # Technical write-up: how MULDE works
 ```
 
 ---
