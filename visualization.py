@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
+import cv2
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -383,3 +384,176 @@ def parse_frame_ranges(shading: str | None) -> list[tuple[int, int]]:
         start_s, end_s = part.split("-", 1)
         ranges.append((int(start_s.strip()), int(end_s.strip())))
     return ranges
+
+
+def _render_static_score_graph(
+    df: pd.DataFrame,
+    segments: list[dict],
+    *,
+    fps: float,
+    threshold: float,
+    threshold_method: str,
+    model_name: str,
+    graph_width_px: int,
+    graph_height_px: int,
+) -> np.ndarray:
+    """Render the full score timeline once and return it as an RGB numpy array.
+
+    The returned image is the static background for the bottom panel of the
+    annotated video; the per-frame red playhead is drawn on top by the caller
+    using ``cv2.line``.
+    """
+    times = df["timestamp_sec"].to_numpy()
+    smooth_nll = df["anomaly_score"].to_numpy()
+    raw_nll = df["anomaly_score_raw"].to_numpy()
+    duration_sec = float(times[-1]) if len(times) else 0.0
+
+    # Size the figure so the rendered pixels match the target panel size.
+    dpi = 100.0
+    fig_w = graph_width_px / dpi
+    fig_h = graph_height_px / dpi
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
+    ax = fig.add_subplot(111)
+
+    _shade_segments(ax, segments, fps, use_time_axis=True)
+
+    ax.plot(times, raw_nll, color="#9aa5b1", alpha=0.55, linewidth=0.8, label="Raw")
+    ax.plot(times, smooth_nll, color="#1d4ed8", linewidth=1.6, label="Smoothed")
+    ax.axhline(
+        threshold,
+        color="#dc2626",
+        linestyle="--",
+        linewidth=1.2,
+        label=f"Threshold ({threshold_method}) = {threshold:.3f}",
+    )
+
+    ax.set_xlim(0, duration_sec)
+    y_pad = max((smooth_nll.max() - smooth_nll.min()) * 0.08, 1e-6)
+    ax.set_ylim(min(smooth_nll.min(), raw_nll.min()) - y_pad,
+                max(smooth_nll.max(), raw_nll.max()) + y_pad)
+    ax.set_xlabel("Time (s)", fontsize=9)
+    ax.set_ylabel("Anomaly score", fontsize=9)
+    ax.set_title(
+        f"{model_name.upper()} — {duration_sec:.1f}s @ {fps:.1f} FPS",
+        fontsize=10, loc="left",
+    )
+    ax.tick_params(axis="both", labelsize=8)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.85)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: format_timestamp(v)))
+    fig.tight_layout(pad=0.4)
+
+    fig.canvas.draw()
+    graph_rgb = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    graph_rgb = graph_rgb.reshape(int(fig_h * dpi), int(fig_w * dpi), 3)
+    plt.close(fig)
+    return graph_rgb
+
+
+def generate_annotated_video(
+    video_path: str | Path,
+    df: pd.DataFrame,
+    segments: list[dict],
+    *,
+    output_path: str | Path,
+    fps: float,
+    threshold: float,
+    threshold_method: str = "mad",
+    model_name: str = "MULDE",
+    graph_height_ratio: float = 0.30,
+) -> Path:
+    """Build an MP4 with the original video on top and a scrolling score graph below.
+
+    The score graph shows the full timeline with detected anomaly segments
+    shaded pink and a red vertical playhead that advances frame-by-frame so the
+    viewer can correlate what the model sees with what is happening in the
+    video.
+
+    Parameters
+    ----------
+    video_path
+        Path to the input ``.mp4`` file.
+    df
+        Per-frame DataFrame from :func:`build_results_dataframe` (must contain
+        ``timestamp_sec``, ``anomaly_score``, ``anomaly_score_raw``).
+    segments
+        Anomaly segments from :func:`build_results_dataframe`.
+    output_path
+        Destination ``.mp4`` path.
+    fps
+        Video frames-per-second (used for the output writer and playhead).
+    threshold, threshold_method
+        Forwarded to the static graph renderer for the threshold line.
+    model_name
+        Label shown in the graph title.
+    graph_height_ratio
+        Fraction of the composite frame height reserved for the graph panel
+        (default ``0.30`` = 30%).
+    """
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Cannot open video: {video_path}")
+
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Graph panel sized to the video width; height proportional to the video
+    # frame height so the composite looks balanced.
+    graph_width_px = video_width
+    graph_height_px = max(120, int(video_height * graph_height_ratio /
+                                   (1.0 - graph_height_ratio)))
+    composite_height = video_height + graph_height_px
+
+    # Pre-render the static score graph once (the expensive matplotlib step).
+    graph_rgb = _render_static_score_graph(
+        df, segments,
+        fps=fps, threshold=threshold, threshold_method=threshold_method,
+        model_name=model_name,
+        graph_width_px=graph_width_px, graph_height_px=graph_height_px,
+    )
+    graph_bgr = cv2.cvtColor(graph_rgb, cv2.COLOR_RGB2BGR)
+
+    times = df["timestamp_sec"].to_numpy()
+    duration_sec = float(times[-1]) if len(times) else 0.0
+
+    # MP4V codec; fall back to MJPG if unavailable.
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(output_path), fourcc, fps,
+                             (video_width, composite_height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps,
+                                 (video_width, composite_height))
+
+    try:
+        for idx in range(num_frames):
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                # Pad with the last good frame if the decoder short-reads.
+                frame = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+
+            # Draw the moving red playhead on a copy of the static graph.
+            graph_frame = graph_bgr.copy()
+            if idx < len(times):
+                t = times[idx]
+            else:
+                t = duration_sec
+            px = int((t / duration_sec) * (graph_width_px - 1)) if duration_sec > 0 else 0
+            cv2.line(graph_frame, (px, 0), (px, graph_height_px),
+                     (0, 0, 255), 2)  # BGR red
+
+            composite = np.vstack([frame, graph_frame])
+            writer.write(composite)
+
+            if (idx + 1) % 200 == 0 or idx == num_frames - 1:
+                print(f"  annotated video: {idx + 1}/{num_frames} frames", flush=True)
+    finally:
+        cap.release()
+        writer.release()
+
+    print(f"Saved annotated video: {output_path}")
+    return output_path
