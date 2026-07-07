@@ -452,13 +452,83 @@ def _render_static_score_graph(
     return graph_rgb, x_start_px, x_end_px
 
 
+def detect_fps_for_image_dir(dir_path: str | Path) -> float:
+    """Automatically detect the FPS of an image directory.
+    
+    1. Looks for neighboring video files with matching stems (e.g. .mp4, .avi).
+    2. Analyzes file modification times for consistent intervals.
+    3. Guesses based on dataset name (ShanghaiTech/Avenue = 25.0, UBnormal = 30.0).
+    4. Falls back to 25.0 FPS.
+    """
+    import cv2
+    import re
+    dir_path = Path(dir_path)
+    stem = dir_path.name
+    
+    # 1. Search for neighboring video files with matching stems
+    video_extensions = ('.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv')
+    parent = dir_path.parent
+    
+    for ext in video_extensions:
+        candidate = parent / f"{stem}{ext}"
+        if candidate.is_file():
+            cap = cv2.VideoCapture(str(candidate))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+            if fps > 0:
+                print(f"Automatically detected FPS {fps:.2f} from sibling video: {candidate.name}")
+                return float(fps)
+                
+    if parent.parent.exists():
+        for sibling_dir in parent.parent.iterdir():
+            if sibling_dir.is_dir() and sibling_dir != parent:
+                for ext in video_extensions:
+                    candidate = sibling_dir / f"{stem}{ext}"
+                    if candidate.is_file():
+                        cap = cv2.VideoCapture(str(candidate))
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        cap.release()
+                        if fps > 0:
+                            print(f"Automatically detected FPS {fps:.2f} from cousin video: {candidate}")
+                            return float(fps)
+                            
+    # 2. Try file modification times
+    try:
+        img_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')
+        img_files = sorted([f for f in dir_path.iterdir() if f.suffix.lower() in img_extensions])
+        if len(img_files) >= 5:
+            mtimes = [f.stat().st_mtime for f in img_files[:10]]
+            diffs = [mtimes[i+1] - mtimes[i] for i in range(len(mtimes)-1)]
+            avg_diff = sum(diffs) / len(diffs)
+            if 0.001 < avg_diff < 1.0:
+                variance = sum((d - avg_diff)**2 for d in diffs) / len(diffs)
+                if variance < 0.01:
+                    calculated_fps = round(1.0 / avg_diff, 1)
+                    print(f"Automatically calculated FPS {calculated_fps} from image file timestamps")
+                    return float(calculated_fps)
+    except Exception:
+        pass
+
+    # 3. Default fallback based on dataset keywords in the path
+    path_lower = str(dir_path).lower()
+    if "shanghaitech" in path_lower or "avenue" in path_lower:
+        print("Defaulting to 25.0 FPS (standard for ShanghaiTech/Avenue datasets)")
+        return 25.0
+    elif "ubnormal" in path_lower:
+        print("Defaulting to 30.0 FPS (standard for UBnormal dataset)")
+        return 30.0
+        
+    print("Defaulting to standard 25.0 FPS")
+    return 25.0
+
+
 def generate_annotated_video(
     video_path: str | Path,
     df: pd.DataFrame,
     segments: list[dict],
     *,
     output_path: str | Path,
-    fps: float,
+    fps: float | None = None,
     threshold: float,
     threshold_method: str = "mad",
     model_name: str = "MULDE",
@@ -495,6 +565,9 @@ def generate_annotated_video(
     video_path = Path(video_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if fps is None:
+        fps = detect_fps_for_image_dir(video_path)
 
     import cv2  # local import — only needed for video output, not score charts
 
