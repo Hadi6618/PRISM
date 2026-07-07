@@ -498,13 +498,26 @@ def generate_annotated_video(
 
     import cv2  # local import — only needed for video output, not score charts
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise FileNotFoundError(f"Cannot open video: {video_path}")
+    cap = None
+    is_image_dir = video_path.is_dir()
+    if is_image_dir:
+        img_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')
+        img_files = sorted([f for f in video_path.iterdir() if f.suffix.lower() in img_extensions])
+        num_frames = len(img_files)
+        if num_frames == 0:
+            raise FileNotFoundError(f"No images found in directory: {video_path}")
+        first_img = cv2.imread(str(img_files[0]))
+        if first_img is None:
+            raise ValueError(f"Cannot read image: {img_files[0]}")
+        video_height, video_width = first_img.shape[:2]
+    else:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Cannot open video: {video_path}")
 
-    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Graph panel sized to the video width; height proportional to the video
     # frame height so the composite looks balanced.
@@ -536,10 +549,15 @@ def generate_annotated_video(
 
     try:
         for idx in range(num_frames):
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                # Pad with the last good frame if the decoder short-reads.
-                frame = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+            if is_image_dir:
+                frame = cv2.imread(str(img_files[idx]))
+                if frame is None:
+                    frame = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+            else:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    # Pad with the last good frame if the decoder short-reads.
+                    frame = np.zeros((video_height, video_width, 3), dtype=np.uint8)
 
             # Draw the moving red playhead on a copy of the static graph.
             graph_frame = graph_bgr.copy()
@@ -563,7 +581,8 @@ def generate_annotated_video(
             if (idx + 1) % 200 == 0 or idx == num_frames - 1:
                 print(f"  annotated video: {idx + 1}/{num_frames} frames", flush=True)
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         writer.release()
 
     print(f"Saved annotated video: {output_path}")
