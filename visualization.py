@@ -395,7 +395,7 @@ def _render_static_score_graph(
     model_name: str,
     graph_width_px: int,
     graph_height_px: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, float, float]:
     """Render the full score timeline once and return it as an RGB numpy array.
 
     The returned image is the static background for the bottom panel of the
@@ -442,10 +442,14 @@ def _render_static_score_graph(
     fig.tight_layout(pad=0.4)
 
     fig.canvas.draw()
-    graph_rgb = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-    graph_rgb = graph_rgb.reshape(int(fig_h * dpi), int(fig_w * dpi), 3)
+    # Get pixel coordinates of the x-axis limits (0 and duration_sec)
+    x_start_px = float(ax.transData.transform((0.0, 0.0))[0])
+    x_end_px = float(ax.transData.transform((duration_sec, 0.0))[0])
+
+    graph_rgba = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+    graph_rgb = graph_rgba.reshape(int(fig_h * dpi), int(fig_w * dpi), 4)[:, :, :3]
     plt.close(fig)
-    return graph_rgb
+    return graph_rgb, x_start_px, x_end_px
 
 
 def generate_annotated_video(
@@ -510,7 +514,7 @@ def generate_annotated_video(
     composite_height = video_height + graph_height_px
 
     # Pre-render the static score graph once (the expensive matplotlib step).
-    graph_rgb = _render_static_score_graph(
+    graph_rgb, x_start_px, x_end_px = _render_static_score_graph(
         df, segments,
         fps=fps, threshold=threshold, threshold_method=threshold_method,
         model_name=model_name,
@@ -543,7 +547,13 @@ def generate_annotated_video(
                 t = times[idx]
             else:
                 t = duration_sec
-            px = int((t / duration_sec) * (graph_width_px - 1)) if duration_sec > 0 else 0
+            
+            if duration_sec > 0:
+                px = int(x_start_px + (t / duration_sec) * (x_end_px - x_start_px))
+            else:
+                px = int(x_start_px)
+            px = max(0, min(graph_width_px - 1, px))
+            
             cv2.line(graph_frame, (px, 0), (px, graph_height_px),
                      (0, 0, 255), 2)  # BGR red
 
