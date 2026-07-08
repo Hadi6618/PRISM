@@ -1,7 +1,7 @@
 # PRISM — Methods
 
 > **Pose + RGB Integration for Scene Monitoring** — a two-stream late-fusion
-> framework for weakly-supervised video anomaly detection (VAD) that combines
+> framework for unsupervised video anomaly detection (VAD) that combines
 > a pose-based detector (STG-NF) with an appearance-based detector (MULDE).
 
 This document is written as a **methods section** suitable for a graduate
@@ -14,7 +14,7 @@ a LaTeX manuscript.
 
 ## 1. Problem setting and notation
 
-We address **weakly-supervised video anomaly detection** at the frame level.
+We address **unsupervised video anomaly detection** at the frame level.
 The training set contains only normal videos; at test time we assign each
 frame $t$ of a test video $v$ a continuous anomaly score
 $s[t] \in \mathbb{R}$ such that higher values indicate a higher likelihood
