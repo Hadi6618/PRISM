@@ -183,7 +183,7 @@ models rarely fire false positives on the same frames.
 | :-- | --: |
 | MULDE (appearance) | 81.4% |
 | STG-NF (pose) | 57.0% |
-| **PRISM** | — |
+| **PRISM** | 82.8% |
 
 Avenue results are computed by setting `DATASET = 'Avenue'` in the notebook
 or passing `--dataset Avenue` to `PRISM.py`. The Avenue AUC gain is expected
