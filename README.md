@@ -18,8 +18,8 @@ scores yields a substantial improvement over either model alone.
 | Method | Stream | ShanghaiTech (Micro AUC) | Avenue (Micro AUC) |
 | :-- | :-- | ---: | ---: |
 | MULDE (Hiera-L + DSM) | Appearance | 79.7% | 81.4% |
-| STG-NF (AlphaPose + Flow) | Pose | 84% | 57.0% |
-| **PRISM (fusion)** | **Both** | **89.9%** | **82.8%** |
+| STG-NF (AlphaPose + Flow) | Pose | 84% | 64.2% |
+| **PRISM (fusion)** | **Both** | **89.9%** | **83%** |
 
 ---
 
