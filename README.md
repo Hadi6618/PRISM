@@ -182,8 +182,8 @@ models rarely fire false positives on the same frames.
 | Method | Micro AUC |
 | :-- | --: |
 | MULDE (appearance) | 81.4% |
-| STG-NF (pose) | 57.0% |
-| **PRISM** | 82.8% |
+| STG-NF (pose) | 64.2% |
+| **PRISM** | 83% |
 
 Avenue results are computed by setting `DATASET = 'Avenue'` in the notebook
 or passing `--dataset Avenue` to `PRISM.py`. The Avenue AUC gain is expected
