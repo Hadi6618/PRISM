@@ -244,6 +244,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     summary["smooth_sigma_mulde"] = chosen_sigma_mulde
     if sigma_search_results:
         summary["sigma_search"] = sigma_search_results
+
+    # Record the requested settings alongside the resolved values. This keeps
+    # alignment reproducible without changing the alignment decision itself.
+    auto_detect_stats = align_stats.get("auto_detect")
+    summary["run_configuration"] = {
+        "dataset": args.dataset or DEFAULT_DATASET,
+        "inputs": {
+            "stgnf_scores": str(args.stgnf_pkl),
+            "mulde_scores": str(args.mulde_pkl),
+            "output_dir": str(args.output_dir),
+        },
+        "normalization": args.normalization,
+        "beta_1_step": float(args.beta_1_step),
+        "alignment": {
+            "requested_frame_offset": int(args.stgnf_frame_offset),
+            "requested_score_mode": args.stgnf_score_mode,
+            "offset_search_enabled": auto_detect_stats is not None,
+            "offset_candidates": [
+                int(value) for value in auto_detect_stats["candidates"]
+            ] if auto_detect_stats is not None else [],
+            "resolved_frame_offset": int(chosen_offset),
+            "resolved_score_mode": chosen_mode,
+            "video_id_mapping_applied": int(n_remapped),
+        },
+        "smoothing": {
+            "search_enabled": bool(args.smooth_sigma_search),
+            "requested_sigma_stgnf": float(args.smooth_sigma_stgnf),
+            "requested_sigma_mulde": float(args.smooth_sigma_mulde),
+            "resolved_sigma_stgnf": float(chosen_sigma_stgnf),
+            "resolved_sigma_mulde": float(chosen_sigma_mulde),
+        },
+    }
     write_outputs(
         results=results,
         best=best,
