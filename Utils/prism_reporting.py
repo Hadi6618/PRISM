@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -57,8 +56,6 @@ def write_outputs(
         best_payload = {"max_micro_auc": None, "reason": summary.get("reason")}
 
     report = {
-        "report_version": 1,
-        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "best": best_payload,
         "summary": summary,
         "alignment_stats": alignment_stats,

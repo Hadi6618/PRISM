@@ -268,9 +268,6 @@ def _align_one_video(
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_OFFSET_CANDIDATES = (-2, -1, 0, 1, 2)
-
-
 def _align_with_auto_offset(
     stgnf: Dict[str, dict],
     mulde: Dict[str, dict],
@@ -379,7 +376,7 @@ def align_per_video(
     stgnf_frame_offset: int = 0,
     auto_detect_offset: bool = False,
     stgnf_score_mode: str = "auto",
-    offset_candidates: Tuple[int, ...] = DEFAULT_OFFSET_CANDIDATES,
+    offset_candidates: Tuple[int, ...] = (-2, -1, 0, 1, 2),
     apply_id_alias: bool = True,
 ) -> Tuple[List[AlignedVideo], dict]:
     """Intersect STG-NF and MULDE per video without applying normalization.
