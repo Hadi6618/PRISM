@@ -212,6 +212,45 @@ your Drive layout differs.
 
 ---
 
+## Manual Ground Truth for a Custom Video
+
+For a custom video without published labels, create a frame-level annotation
+file before evaluating the two streams. The utility reads the video's FPS,
+counts the decoded frames, and writes one row per frame with `label=1` for an
+abnormal frame and `label=0` for a normal frame. Frame indices are zero-based,
+matching the PRISM score convention.
+
+For example, if an explosion occurs from 2:34 through 2:36:
+
+```bash
+python Utils/manual_video_ground_truth.py \\
+    --video /content/drive/MyDrive/videos/explosion.mp4 \\
+    --time-ranges "2:34-2:36" \\
+    --output-dir /content/drive/MyDrive/videos/explosion_ground_truth
+```
+
+You can also annotate explicit inclusive frame ranges:
+
+```bash
+python Utils/manual_video_ground_truth.py \\
+    --video explosion.mp4 \\
+    --frame-ranges "750-810,1200-1260" \\
+    --output-dir ground_truth
+```
+
+The output directory contains:
+
+- `<video>_ground_truth.csv` — one row for every decoded frame with frame index,
+  timestamp, and manual label;
+- `<video>_ground_truth.pkl` — NumPy arrays and metadata for later attachment to
+  STG-NF/MULDE score files;
+- `<video>_ground_truth.json` — human-readable copy of the annotation.
+
+Use `--extract-frames` only if image files are also needed; it writes every
+frame as JPEG and can require substantial storage. For variable-frame-rate or
+incorrectly tagged downloads, use `--fps` after verifying the rate independently.
+The annotation tool records labels only; it does not select fusion weights.
+
 ## CLI Usage
 
 `PRISM.py` can also be invoked directly from the command line. On Colab:
