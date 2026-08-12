@@ -11,9 +11,11 @@ Pipeline (same philosophy as two-stream PRISM):
 1. Load STG-NF / MULDE pickles + third CSV into a common per-video dict.
 2. Map video IDs (Avenue: ``1`` / ``01`` / ``01_0001``).
 3. Intersect frames; use MULDE labels (``1 = anomaly``).
-4. Auto-fix polarity per stream vs labels (keep orientation with higher AUC).
-5. Independent ``global_rank`` normalization per stream (not shared scale).
-6. Optional Gaussian smooth per stream (skip third if using pre-smoothed column).
+4. Auto-fix STG-NF/MULDE polarity; keep the third model's anomaly polarity explicit.
+5. Normalize each stream independently. The recommended configuration is
+   ``global_rank`` for STG-NF/MULDE and ``none`` for the third model when its
+   values are calibrated anomaly scores (for example, ``> 0.5`` = anomaly).
+6. Optional Gaussian smooth per stream (skip third if using a pre-smoothed column).
 7. Grid-search convex weights ``w1+w2+w3=1`` for Micro AUC.
 
 Example (local Avenue)::
@@ -24,7 +26,10 @@ Example (local Avenue)::
         --third_csv Others/Results/frame_anomaly_scores.csv \\
         --third_score_col smoothed_score \\
         --output_dir Others/Results/three_way_avenue \\
-        --normalization global_rank
+        --stgnf_normalization global_rank \\
+        --mulde_normalization global_rank \\
+        --third_normalization none \\
+        --third_score_mode anomaly
 """
 
 from __future__ import annotations
@@ -262,8 +267,22 @@ def align_three(
     return aligned, stats
 
 
-def apply_polarity(aligned: List[TripleAligned]) -> Tuple[List[TripleAligned], dict]:
-    """Flip any stream whose raw orientation is worse than its negation vs labels."""
+def apply_polarity(
+    aligned: List[TripleAligned],
+    third_score_mode: str = "auto",
+) -> Tuple[List[TripleAligned], dict]:
+    """Orient scores toward ``1 = anomaly``.
+
+    STG-NF and MULDE are auto-oriented against the supplied labels.  The
+    third model may be fixed explicitly with ``third_score_mode='anomaly'``
+    or ``'normality'``.  Use the fixed anomaly mode when the third model's
+    numeric score has a defined threshold such as ``score > 0.5``.
+    ``'auto'`` remains available for backward compatibility.
+    """
+    if third_score_mode not in {"auto", "anomaly", "normality"}:
+        raise ValueError(
+            "third_score_mode must be 'auto', 'anomaly', or 'normality'"
+        )
     if not aligned:
         return aligned, {}
     all_y = np.concatenate([v.labels for v in aligned])
@@ -275,7 +294,20 @@ def apply_polarity(aligned: List[TripleAligned]) -> Tuple[List[TripleAligned], d
     report = {}
     oriented = {}
     for name, raw in streams.items():
-        fixed, mode, auc = _best_polarity(raw, all_y)
+        if name == "third" and third_score_mode != "auto":
+            if third_score_mode == "normality":
+                fixed = (-raw).astype(np.float32)
+                mode = "normality->flipped (fixed)"
+            else:
+                fixed = raw.astype(np.float32)
+                mode = "anomaly (fixed)"
+            auc = (
+                float(roc_auc_score(all_y, fixed))
+                if len(np.unique(all_y)) >= 2
+                else float("nan")
+            )
+        else:
+            fixed, mode, auc = _best_polarity(raw, all_y)
         oriented[name] = fixed
         report[name] = {"mode": mode, "micro_auc_after_polarity": auc}
 
@@ -303,26 +335,56 @@ def apply_polarity(aligned: List[TripleAligned]) -> Tuple[List[TripleAligned], d
 # ---------------------------------------------------------------------------
 
 
+_NORMALIZATION_STRATEGIES = {
+    "global_rank",
+    "global_minmax",
+    "global_zscore",
+    "none",
+}
+
+
+def _normalize_stream(values: np.ndarray, strategy: str) -> np.ndarray:
+    """Normalize one stream while preserving ``none`` as the original values."""
+    if strategy == "global_rank":
+        return _rank_to_unit(values)
+    if strategy == "global_minmax":
+        return _safe_minmax(values)
+    if strategy == "global_zscore":
+        return _safe_zscore(values)
+    if strategy == "none":
+        return values.astype(np.float32)
+    raise ValueError(
+        f"Unknown normalization strategy: {strategy!r}. "
+        f"Valid options: {sorted(_NORMALIZATION_STRATEGIES)}"
+    )
+
+
 def normalize_three(
     aligned: List[TripleAligned],
     strategy: str = "global_rank",
+    *,
+    stgnf_strategy: Optional[str] = None,
+    mulde_strategy: Optional[str] = None,
+    third_strategy: Optional[str] = None,
 ) -> List[TripleAligned]:
+    """Normalize each stream independently.
+
+    ``strategy`` is the legacy all-stream fallback.  Prefer explicit
+    per-stream settings for three-way fusion.  In particular, a calibrated
+    third-model score must use ``third_strategy='none'`` so a threshold such
+    as ``0.5`` retains its original meaning.
+    """
     if not aligned:
         return aligned
+    stg_strategy = stgnf_strategy or strategy
+    mul_strategy = mulde_strategy or strategy
+    thr_strategy = third_strategy or strategy
     all_s = np.concatenate([v.stgnf for v in aligned]).astype(np.float32)
     all_m = np.concatenate([v.mulde for v in aligned]).astype(np.float32)
     all_t = np.concatenate([v.third for v in aligned]).astype(np.float32)
-
-    if strategy == "global_rank":
-        ns, nm, nt = _rank_to_unit(all_s), _rank_to_unit(all_m), _rank_to_unit(all_t)
-    elif strategy == "global_minmax":
-        ns, nm, nt = _safe_minmax(all_s), _safe_minmax(all_m), _safe_minmax(all_t)
-    elif strategy == "global_zscore":
-        ns, nm, nt = _safe_zscore(all_s), _safe_zscore(all_m), _safe_zscore(all_t)
-    elif strategy == "none":
-        ns, nm, nt = all_s, all_m, all_t
-    else:
-        raise ValueError(f"Unknown strategy: {strategy}")
+    ns = _normalize_stream(all_s, stg_strategy)
+    nm = _normalize_stream(all_m, mul_strategy)
+    nt = _normalize_stream(all_t, thr_strategy)
 
     out: List[TripleAligned] = []
     offset = 0
@@ -431,6 +493,86 @@ def standalone_aucs(aligned: List[TripleAligned]) -> dict:
     return out
 
 
+def frame_results_three(
+    normalized: List[TripleAligned],
+    fused_inputs: List[TripleAligned],
+    best: TripleGridResult,
+) -> List[dict]:
+    """Build one result row per aligned frame for the selected fusion weights.
+
+    ``normalized`` preserves the scores immediately after independent stream
+    normalization. ``fused_inputs`` contains the scores actually passed to the
+    fusion search (normally normalized scores after optional smoothing). The
+    output therefore makes both stages explicit instead of hiding the
+    smoothing step in a single ambiguous score column.
+    """
+    if len(normalized) != len(fused_inputs):
+        raise ValueError("normalized and fused_inputs must contain the same videos")
+
+    rows: List[dict] = []
+    for norm_video, fused_video in zip(normalized, fused_inputs):
+        if norm_video.video_id != fused_video.video_id:
+            raise ValueError("normalized and fused_inputs video order does not match")
+        if not np.array_equal(norm_video.frame_indices, fused_video.frame_indices):
+            raise ValueError("normalized and fused_inputs frame indices do not match")
+        fused_score = (
+            best.w_stgnf * fused_video.stgnf
+            + best.w_mulde * fused_video.mulde
+            + best.w_third * fused_video.third
+        )
+        for i, frame_index in enumerate(norm_video.frame_indices):
+            rows.append(
+                {
+                    "video_id": norm_video.video_id,
+                    "frame_index": int(frame_index),
+                    "label": int(norm_video.labels[i]),
+                    "stgnf_normalized": float(norm_video.stgnf[i]),
+                    "mulde_normalized": float(norm_video.mulde[i]),
+                    "third_model_normalized": float(norm_video.third[i]),
+                    "stgnf_result": float(fused_video.stgnf[i]),
+                    "mulde_result": float(fused_video.mulde[i]),
+                    "third_model_result": float(fused_video.third[i]),
+                    "fused_model_result": float(fused_score[i]),
+                    "w_stgnf": float(best.w_stgnf),
+                    "w_mulde": float(best.w_mulde),
+                    "w_third": float(best.w_third),
+                }
+            )
+    return rows
+
+
+def write_frame_results_three(
+    normalized: List[TripleAligned],
+    fused_inputs: List[TripleAligned],
+    best: TripleGridResult,
+    output_path: Path,
+) -> Path:
+    """Write the complete per-frame three-stream result CSV."""
+    rows = frame_results_three(normalized, fused_inputs, best)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "video_id",
+        "frame_index",
+        "label",
+        "stgnf_normalized",
+        "mulde_normalized",
+        "third_model_normalized",
+        "stgnf_result",
+        "mulde_result",
+        "third_model_result",
+        "fused_model_result",
+        "w_stgnf",
+        "w_mulde",
+        "w_third",
+    ]
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return output_path
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -452,8 +594,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument(
         "--normalization",
         type=str,
-        default="global_rank",
-        choices=("global_rank", "global_minmax", "global_zscore", "none"),
+        default=None,
+        choices=tuple(sorted(_NORMALIZATION_STRATEGIES)),
+        help="Legacy setting applied to all streams; prefer the per-stream options.",
+    )
+    p.add_argument(
+        "--stgnf_normalization",
+        type=str,
+        default=None,
+        choices=tuple(sorted(_NORMALIZATION_STRATEGIES)),
+        help="STG-NF normalization (default: global_rank).",
+    )
+    p.add_argument(
+        "--mulde_normalization",
+        type=str,
+        default=None,
+        choices=tuple(sorted(_NORMALIZATION_STRATEGIES)),
+        help="MULDE normalization (default: global_rank).",
+    )
+    p.add_argument(
+        "--third_normalization",
+        type=str,
+        default=None,
+        choices=tuple(sorted(_NORMALIZATION_STRATEGIES)),
+        help="Third-model normalization (default: none; preserve calibrated scores).",
+    )
+    p.add_argument(
+        "--third_score_mode",
+        type=str,
+        default="anomaly",
+        choices=("anomaly", "normality", "auto"),
+        help="Third-model polarity. Use anomaly when larger scores mean anomaly.",
     )
     p.add_argument("--weight_step", type=float, default=0.05, help="Simplex grid step.")
     p.add_argument("--sigma_stgnf", type=float, default=0.0)
@@ -475,7 +646,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if align_stats["skipped"]:
         print("Skipped clips:", align_stats["skipped"][:10])
 
-    aligned, pol = apply_polarity(aligned)
+    aligned, pol = apply_polarity(
+        aligned,
+        third_score_mode=args.third_score_mode,
+    )
     print("Polarity (vs MULDE labels, 1=anomaly):")
     for k, v in pol.items():
         print(f"  {k}: {v}")
@@ -483,16 +657,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     raw_auc = standalone_aucs(aligned)
     print("Standalone Micro AUC after polarity (before norm):", raw_auc)
 
-    aligned = normalize_three(aligned, strategy=args.normalization)
-    aligned = smooth_three(
+    legacy_normalization = args.normalization
+    stgnf_normalization = args.stgnf_normalization or legacy_normalization or "global_rank"
+    mulde_normalization = args.mulde_normalization or legacy_normalization or "global_rank"
+    third_normalization = args.third_normalization or legacy_normalization or "none"
+    normalized = normalize_three(
         aligned,
+        stgnf_strategy=stgnf_normalization,
+        mulde_strategy=mulde_normalization,
+        third_strategy=third_normalization,
+    )
+    aligned = smooth_three(
+        normalized,
         sigma_stgnf=args.sigma_stgnf,
         sigma_mulde=args.sigma_mulde,
         sigma_third=args.sigma_third,
     )
     norm_auc = standalone_aucs(aligned)
     print(
-        f"Standalone Micro AUC after {args.normalization} (+smooth):",
+        "Standalone Micro AUC after per-stream normalization (+smooth):",
         norm_auc,
     )
 
@@ -538,7 +721,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "polarity": pol,
         "standalone_auc_after_polarity": raw_auc,
         "standalone_auc_after_norm": norm_auc,
-        "normalization": args.normalization,
+        "normalization": {
+            "stgnf": stgnf_normalization,
+            "mulde": mulde_normalization,
+            "third": third_normalization,
+        },
+        "legacy_normalization": legacy_normalization,
+        "third_score_mode": args.third_score_mode,
         "third_score_col": args.third_score_col,
         "sigmas": {
             "stgnf": args.sigma_stgnf,
@@ -564,6 +753,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "stgnf_pkl": str(args.stgnf_pkl),
             "mulde_pkl": str(args.mulde_pkl),
             "third_csv": str(args.third_csv),
+            "frame_results_csv": str(Path(args.output_dir) / "three_way_frame_results.csv"),
         },
     }
     # JSON-friendly skipped
@@ -579,7 +769,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         w.writerow(["w_stgnf", "w_mulde", "w_third", "micro_auc"])
         for r in results:
             w.writerow([r.w_stgnf, r.w_mulde, r.w_third, r.micro_auc])
+    frame_results_path = write_frame_results_three(
+        normalized=normalized,
+        fused_inputs=aligned,
+        best=best,
+        output_path=out_dir / "three_way_frame_results.csv",
+    )
     print(f"Wrote {out_dir / 'three_way_report.json'}")
+    print(f"Wrote {frame_results_path}")
     return 0
 
 

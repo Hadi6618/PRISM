@@ -177,6 +177,24 @@ because the two models' errors are de-correlated: MULDE catches the
 vehicle/object anomalies that STG-NF is structurally blind to, and the two
 models rarely fire false positives on the same frames.
 
+### Three-stream fusion
+
+`PRISM_Runner.ipynb` additionally supports the third model's frame-level CSV.
+The streams do **not** all use the same normalization by default:
+
+- STG-NF: `global_rank`;
+- MULDE: `global_rank`;
+- third model: `none`, preserving its calibrated `[0, 1]` score and the
+  meaning of its `score > 0.5` anomaly threshold.
+
+This is intentional. Rank normalization preserves AUC ordering but changes
+numeric thresholds, so it must not be applied to a model whose score values
+have a defined decision threshold. The notebook records the three
+normalization choices and the third-model polarity in
+`three_way_report.json`. If the CSV contains a pre-smoothed score, keep the
+third-model smoothing sigma at `0.0`; select `raw_score` instead when the
+`0.5` threshold was defined on the raw output.
+
 ### Avenue (21 test videos)
 
 | Method | Micro AUC |
@@ -288,7 +306,7 @@ The script writes:
 PRISM/
 ├── PRISM.py                              # PRISM pipeline (alignment, normalization, grid search)
 ├── visualization.py                      # Reporting: thresholds, segments, dashboards
-├── PRISM_Runner.ipynb                    # Colab: fuse STG-NF + MULDE scores on ShanghaiTech OR Avenue
+├── PRISM_Runner.ipynb                    # Colab: fuse STG-NF + MULDE + third-model scores
 ├── STG-NF.ipynb                          # Colab: STG-NF pose extraction, training, score export
 ├── MUDLE.ipynb                           # Colab: train the MULDE density model + GMM on Hiera-L features
 ├── PRISM_Test.ipynb                      # Colab: end-to-end anomaly detection on a single custom video
