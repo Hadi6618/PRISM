@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gt-dir",
         type=Path,
-        default=Path("/content/drive/MyDrive/Experiments/custom_video_cache/CAE/1/labels_output.zip"),
+        default=Path("/content/test_inputs/labels_output"),
         help="ShanghaiTech test set frame masks for AUC calculation."
     )
     parser.add_argument(
