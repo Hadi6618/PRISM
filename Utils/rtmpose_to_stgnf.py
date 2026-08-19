@@ -10,7 +10,7 @@ is a dict:
     {
       "<person_id>": {
         "<frame_key>": {"keypoints": [x, y, c, ... x17, y17, c17],  # flat 17*3
-                        "scores":    [c1, ..., c17]},               # 17 confidences
+                        "scores":    float},                        # 1 detection confidence
         ...
       },
       ...
@@ -56,19 +56,26 @@ def _frame_key(frame_index, num_digits=4):
 def rtmpose_to_tracked_person(
     keypoints: Sequence[Sequence[Sequence[float]]],
     keypoint_scores: Sequence[Sequence[float]],
+    det_scores: Sequence[float],
     track_ids: Sequence[int],
     frame_indices: Sequence[int],
     num_digits: int = 4,
 ) -> Dict[str, Dict[str, Dict[str, list]]]:
-    """Convert RTMPose top-down outputs into the STG-NF tracked-person dict.
+    """Convert top-down pose outputs into the STG-NF tracked-person dict.
 
     Parameters
     ----------
     keypoints:
-        Shape ``[N, 17, 2]`` -- ``pred_instances.keypoints`` from
-        ``mmpose.apis.inference_topdown`` (already in image pixel space).
+        Shape ``[N, 17, 2]`` -- per-instance keypoints in image pixel space.
     keypoint_scores:
-        Shape ``[N, 17]`` -- ``pred_instances.keypoint_scores``.
+        Shape ``[N, 17]`` -- per-keypoint confidences. These are embedded into
+        the flat ``[x, y, c] * 17`` ``keypoints`` list (STG-NF uses the third
+        channel only when ``model_confidence`` is enabled).
+    det_scores:
+        Shape ``[N]`` -- one scalar *detection* confidence per instance. This
+        becomes the ``scores`` field, which STG-NF's ``single_pose_dict2np``
+        stacks per frame and then reshapes to ``(1, seg_len)`` -- so it MUST be
+        a scalar, not a per-keypoint list (AlphaPose's ``item['score']``).
     track_ids:
         Shape ``[N]`` -- per-instance track id (int). Instances sharing a track
         id are grouped into one person across frames.
@@ -79,10 +86,11 @@ def rtmpose_to_tracked_person(
 
     Returns
     -------
-    The ``{person_id: {frame_key: {"keypoints": [...], "scores": [...]}}}`` dict.
+    The ``{person_id: {frame_key: {"keypoints": [...], "scores": float}}}`` dict.
     """
     keypoints = np.asarray(keypoints, dtype=np.float64)
     keypoint_scores = np.asarray(keypoint_scores, dtype=np.float64)
+    det_scores = np.asarray(det_scores, dtype=np.float64)
     track_ids = np.asarray(track_ids)
     frame_indices = np.asarray(frame_indices)
 
@@ -92,8 +100,12 @@ def rtmpose_to_tracked_person(
         raise ValueError(
             f"keypoint_scores shape {keypoint_scores.shape} != keypoints[:2] {keypoints.shape[:2]}"
         )
-    if not (keypoints.shape[0] == keypoint_scores.shape[0] == track_ids.shape[0] == frame_indices.shape[0]):
-        raise ValueError("keypoints/keypoint_scores/track_ids/frame_indices must have equal length")
+    if det_scores.shape != (keypoints.shape[0],):
+        raise ValueError(
+            f"det_scores shape {det_scores.shape} != (N,) {keypoints.shape[0]}"
+        )
+    if not (keypoints.shape[0] == keypoint_scores.shape[0] == det_scores.shape[0] == track_ids.shape[0] == frame_indices.shape[0]):
+        raise ValueError("keypoints/keypoint_scores/det_scores/track_ids/frame_indices must have equal length")
 
     tracked: Dict[str, Dict[str, Dict[str, list]]] = {}
     for i in range(keypoints.shape[0]):
@@ -106,7 +118,7 @@ def rtmpose_to_tracked_person(
 
         tracked.setdefault(pid, {})[fk] = {
             "keypoints": kp_flat,
-            "scores": [float(c) for c in keypoint_scores[i]],
+            "scores": float(det_scores[i]),
         }
     return tracked
 
@@ -119,9 +131,9 @@ def items_to_tracked_person(
 
     Each item is a dict with ``idx`` (person/track id), ``image_id`` (frame
     name such as ``frame_0000.jpg`` or ``0.jpg``), ``keypoints`` (flat
-    ``[x, y, c] * 17`` list) and ``score`` (17 confidences). This mirrors the
-    conversion the PRISM notebook already does for AlphaPose, so a RTMPose
-    exporter that emits the same list format can reuse it unchanged.
+    ``[x, y, c] * 17`` list) and ``score`` (a single scalar detection
+    confidence). This mirrors the conversion the PRISM notebook already does for
+    AlphaPose, so a pose exporter that emits the same list format can reuse it.
     """
     tracked: Dict[str, Dict[str, Dict[str, list]]] = {}
     for item in items:
@@ -131,7 +143,7 @@ def items_to_tracked_person(
         fk = (digits or stem).zfill(num_digits)
         tracked.setdefault(pid, {})[fk] = {
             "keypoints": list(item["keypoints"]),
-            "scores": list(item["score"]),
+            "scores": float(item["score"]),
         }
     return tracked
 
