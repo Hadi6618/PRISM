@@ -38,6 +38,8 @@ Public API (re-exported from sub-modules):
 * :func:`smooth_scores_independent`, :func:`search_best_sigma_independent`
   (from :mod:`prism_smoothing`)
 * :class:`GridResult`, :func:`grid_search_fusion` (from :mod:`prism_fusion`)
+* :class:`AucEvaluator`, :func:`rank_auc`, :func:`macro_auc_from_scores_by_video`
+  (from :mod:`prism_metrics`)
 * :func:`results_to_table`, :func:`write_outputs` (from :mod:`prism_reporting`)
 * :func:`main` (from :mod:`prism_cli`)
 """
@@ -96,6 +98,13 @@ from prism_smoothing import (  # noqa: E402
 from prism_fusion import (  # noqa: E402
     GridResult,
     grid_search_fusion,
+)
+
+# Micro/macro AUC helpers (shared by the two- and three-stream paths)
+from prism_metrics import (  # noqa: E402
+    AucEvaluator,
+    macro_auc_from_scores_by_video,
+    rank_auc,
 )
 
 # Reporting

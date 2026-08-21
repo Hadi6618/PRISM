@@ -21,6 +21,7 @@ def results_to_table(results: List[GridResult]) -> "pd.DataFrame":
                 "beta_1_stgnf": r.beta_1,
                 "beta_2_mulde": r.beta_2,
                 "micro_auc": r.micro_auc,
+                "macro_auc": getattr(r, "macro_auc", None),
             }
             for r in results
         ]
@@ -49,6 +50,7 @@ def write_outputs(
             "beta_1_stgnf": best.beta_1,
             "beta_2_mulde": best.beta_2,
             "max_micro_auc": best.micro_auc,
+            "max_macro_auc": getattr(best, "macro_auc", None),
             "num_frames": best.num_frames,
             "num_videos": best.num_videos,
         }
@@ -69,9 +71,12 @@ def write_outputs(
     print(f"Saved grid search table: {table_path}")
     print(f"Saved ensemble report:   {report_path}")
     if best is not None and best.micro_auc is not None:
+        macro = getattr(best, "macro_auc", None)
+        macro_s = f", Macro AUC={macro * 100:.4f}%" if macro is not None else ""
         print(
             f"Optimal weights -> beta_1 (STG-NF)={best.beta_1:.2f}, "
             f"beta_2 (MULDE)={best.beta_2:.2f}, Micro AUC={best.micro_auc * 100:.4f}%"
+            f"{macro_s}"
         )
     else:
         print("Optimal weights: undefined (insufficient label diversity)")

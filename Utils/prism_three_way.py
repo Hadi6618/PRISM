@@ -16,7 +16,8 @@ Pipeline (same philosophy as two-stream PRISM):
    ``global_rank`` for STG-NF/MULDE and ``none`` for the third model when its
    values are calibrated anomaly scores (for example, ``> 0.5`` = anomaly).
 6. Optional Gaussian smooth per stream (skip third if using a pre-smoothed column).
-7. Grid-search convex weights ``w1+w2+w3=1`` for Micro AUC.
+7. Grid-search convex weights ``w1+w2+w3=1`` for Micro and Macro AUC; the
+   selection metric (default: micro) picks the reported best row.
 
 Example (local Avenue)::
 
@@ -51,6 +52,7 @@ if str(_UTILS) not in sys.path:
     sys.path.insert(0, str(_UTILS))
 
 from prism_io import load_score_pickle  # noqa: E402
+from prism_metrics import AucEvaluator  # noqa: E402
 from prism_normalization import _rank_to_unit, _safe_minmax, _safe_zscore  # noqa: E402
 
 
@@ -446,12 +448,22 @@ class TripleGridResult:
     w_mulde: float
     w_third: float
     micro_auc: float
+    macro_auc: Optional[float] = None  # mean per-video AUC (one-class videos skipped)
 
 
 def grid_search_three(
     aligned: List[TripleAligned],
     step: float = 0.05,
+    selection_metric: str = "micro",
 ) -> Tuple[List[TripleGridResult], Optional[TripleGridResult]]:
+    """Grid-search the simplex ``w1+w2+w3=1`` reporting micro AND macro AUC.
+
+    ``selection_metric`` ('micro' or 'macro') decides which metric picks the
+    best row and the sort order; both metrics are computed for every weight
+    combination regardless, so the grid table always carries both columns.
+    """
+    if selection_metric not in {"micro", "macro"}:
+        raise ValueError("selection_metric must be 'micro' or 'macro'")
     if not aligned:
         return [], None
     s = np.concatenate([v.stgnf for v in aligned]).astype(np.float64)
@@ -460,6 +472,11 @@ def grid_search_three(
     y = np.concatenate([v.labels for v in aligned]).astype(np.uint8)
     if len(np.unique(y)) < 2:
         return [], None
+    evaluator = AucEvaluator(aligned)
+
+    def sort_key(r: TripleGridResult) -> float:
+        value = r.micro_auc if selection_metric == "micro" else r.macro_auc
+        return -1.0 if value is None else value
 
     results: List[TripleGridResult] = []
     best: Optional[TripleGridResult] = None
@@ -472,24 +489,35 @@ def grid_search_three(
                 continue
             w3 = max(0.0, float(w3))
             fused = w1 * s + w2 * m + w3 * t
-            try:
-                auc = float(roc_auc_score(y, fused))
-            except ValueError:
+            auc, macro_auc = evaluator.micro_macro(fused)
+            if auc is None:
                 continue
-            row = TripleGridResult(float(w1), float(w2), float(w3), auc)
+            row = TripleGridResult(float(w1), float(w2), float(w3), auc, macro_auc)
             results.append(row)
-            if best is None or auc > best.micro_auc:
+            if best is None or sort_key(row) > sort_key(best):
                 best = row
-    results.sort(key=lambda r: r.micro_auc, reverse=True)
+    results.sort(key=sort_key, reverse=True)
     return results, best
 
 
 def standalone_aucs(aligned: List[TripleAligned]) -> dict:
+    """Micro AUC per stream on the concatenated frames (legacy shape)."""
     y = np.concatenate([v.labels for v in aligned])
     out = {}
     for name in ("stgnf", "mulde", "third"):
         s = np.concatenate([getattr(v, name) for v in aligned])
         out[name] = float(roc_auc_score(y, s)) if len(np.unique(y)) >= 2 else None
+    return out
+
+
+def standalone_metrics(aligned: List[TripleAligned]) -> dict:
+    """Micro AND macro AUC per stream on the aligned (intersected) frames."""
+    evaluator = AucEvaluator(aligned)
+    out = {}
+    for name in ("stgnf", "mulde", "third"):
+        s = np.concatenate([getattr(v, name) for v in aligned]).astype(np.float64)
+        micro, macro = evaluator.micro_macro(s)
+        out[name] = {"micro_auc": micro, "macro_auc": macro}
     return out
 
 
@@ -627,6 +655,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Third-model polarity. Use anomaly when larger scores mean anomaly.",
     )
     p.add_argument("--weight_step", type=float, default=0.05, help="Simplex grid step.")
+    p.add_argument(
+        "--selection_metric",
+        type=str,
+        default="micro",
+        choices=("micro", "macro"),
+        help="Metric that selects the best weight row (default: micro). Both are computed.",
+    )
     p.add_argument("--sigma_stgnf", type=float, default=0.0)
     p.add_argument("--sigma_mulde", type=float, default=0.0)
     p.add_argument(
@@ -655,7 +690,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  {k}: {v}")
 
     raw_auc = standalone_aucs(aligned)
+    raw_metrics = standalone_metrics(aligned)
     print("Standalone Micro AUC after polarity (before norm):", raw_auc)
+    print("Standalone Macro AUC after polarity (before norm):",
+          {k: v["macro_auc"] for k, v in raw_metrics.items()})
 
     legacy_normalization = args.normalization
     stgnf_normalization = args.stgnf_normalization or legacy_normalization or "global_rank"
@@ -674,25 +712,39 @@ def main(argv: Optional[List[str]] = None) -> int:
         sigma_third=args.sigma_third,
     )
     norm_auc = standalone_aucs(aligned)
+    norm_metrics = standalone_metrics(aligned)
     print(
         "Standalone Micro AUC after per-stream normalization (+smooth):",
         norm_auc,
     )
+    print(
+        "Standalone Macro AUC after per-stream normalization (+smooth):",
+        {k: v["macro_auc"] for k, v in norm_metrics.items()},
+    )
 
-    results, best = grid_search_three(aligned, step=args.weight_step)
+    results, best = grid_search_three(
+        aligned, step=args.weight_step, selection_metric=args.selection_metric
+    )
     if best is None:
         print("Fusion failed (no valid AUC).")
         return 1
 
+    macro_s = (
+        f"  Macro AUC={best.macro_auc * 100:.2f}%" if best.macro_auc is not None else ""
+    )
     print(
-        f"BEST fusion: w_stgnf={best.w_stgnf:.3f}  w_mulde={best.w_mulde:.3f}  "
-        f"w_third={best.w_third:.3f}  Micro AUC={best.micro_auc * 100:.2f}%"
+        f"BEST fusion (by {args.selection_metric}): w_stgnf={best.w_stgnf:.3f}  "
+        f"w_mulde={best.w_mulde:.3f}  w_third={best.w_third:.3f}  "
+        f"Micro AUC={best.micro_auc * 100:.2f}%{macro_s}"
     )
     print("Top-5 weight combos:")
     for row in results[:5]:
+        row_macro = (
+            f"{row.macro_auc * 100:.2f}%" if row.macro_auc is not None else "n/a"
+        )
         print(
             f"  ({row.w_stgnf:.2f}, {row.w_mulde:.2f}, {row.w_third:.2f}) -> "
-            f"{row.micro_auc * 100:.2f}%"
+            f"micro {row.micro_auc * 100:.2f}% | macro {row_macro}"
         )
 
     # Pairwise ablations (set one weight to 0 on the simplex via 2-way re-eval)
@@ -720,7 +772,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "align_stats": align_stats,
         "polarity": pol,
         "standalone_auc_after_polarity": raw_auc,
+        "standalone_macro_after_polarity": {
+            k: v["macro_auc"] for k, v in raw_metrics.items()
+        },
         "standalone_auc_after_norm": norm_auc,
+        "standalone_macro_after_norm": {
+            k: v["macro_auc"] for k, v in norm_metrics.items()
+        },
         "normalization": {
             "stgnf": stgnf_normalization,
             "mulde": mulde_normalization,
@@ -739,13 +797,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "w_mulde": best.w_mulde,
             "w_third": best.w_third,
             "micro_auc": best.micro_auc,
+            "macro_auc": best.macro_auc,
         },
+        "selection_metric": args.selection_metric,
         "top5": [
             {
                 "w_stgnf": r.w_stgnf,
                 "w_mulde": r.w_mulde,
                 "w_third": r.w_third,
                 "micro_auc": r.micro_auc,
+                "macro_auc": r.macro_auc,
             }
             for r in results[:5]
         ],
@@ -766,9 +827,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dump(report, f, indent=2)
     with (out_dir / "three_way_grid.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["w_stgnf", "w_mulde", "w_third", "micro_auc"])
+        w.writerow(["w_stgnf", "w_mulde", "w_third", "micro_auc", "macro_auc"])
         for r in results:
-            w.writerow([r.w_stgnf, r.w_mulde, r.w_third, r.micro_auc])
+            w.writerow([r.w_stgnf, r.w_mulde, r.w_third, r.micro_auc, r.macro_auc])
     frame_results_path = write_frame_results_three(
         normalized=normalized,
         fused_inputs=aligned,

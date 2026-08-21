@@ -213,7 +213,9 @@ correspond to a soft ensemble.
 
 We sweep $\beta_1$ over the grid
 $\{0.00, 0.01, \dots, 1.00\}$ (101 points) and pick the value that
-maximises frame-level Micro AUC on the aligned test set:
+maximises frame-level Micro AUC on the aligned test set; the mean
+per-video Macro AUC (§4) is computed for every candidate alongside and
+reported with the selected row:
 
 $$
 \hat\beta_1 \;=\; \arg\max_{\beta_1} \;
@@ -256,8 +258,11 @@ For each dataset we:
 
 **Primary metric:** frame-level Micro AUC (all test frames concatenated,
 ROC AUC against the binary ground-truth label). **Secondary metric:**
-Macro AUC (per-video AUC, averaged across the test split). The current
-release reports Micro AUC.
+Macro AUC (per-video ROC AUC, averaged across the test videos; videos whose
+labels contain a single class are skipped because a fully normal clip
+admits no per-video AUC). Both metrics are computed by the single-stream
+exports and for every weight combination of the fusion grid search; the
+reported weight row is selected by Micro AUC unless stated otherwise.
 
 We do not perform any test-time training; the only learned components are
 the STG-NF normalising flow, the MULDE DSM score network, and the MULDE

@@ -209,6 +209,27 @@ to be larger than ShanghaiTech because STG-NF is much weaker relative to
 MULDE on Avenue, so MULDE dominates the fusion and the pose stream acts
 purely as a noisy supplement.
 
+### Metrics
+
+All notebooks and the fusion pipeline report two frame-level metrics:
+
+- **Micro AUC** — ROC AUC over all test frames concatenated (the headline
+  metric above).
+- **Macro AUC** — mean of the per-video ROC AUCs. Test videos whose labels
+  contain a single class (fully normal clips, which have no per-video AUC)
+  are skipped and reported. Macro AUC treats every video equally regardless
+  of length.
+
+The single-stream exports carry both metrics in their pickle metadata
+(`micro_auc` / `macro_auc` for STG-NF, `best_micro_auc` / `best_macro_auc`
+for MULDE), and the fusion grid search computes both for every weight
+combination. The best weight row is selected by `SELECTION_METRIC`
+(default `micro`); `three_way_report.json` always records both, along with
+the standalone macro AUCs computed on the aligned (intersected) frames.
+Note that a stream's exported macro AUC is computed over its *full* test
+set, which can differ slightly from the aligned-frames macro reported by
+the fusion step.
+
 ---
 
 ## Quick Start (Google Colab)
