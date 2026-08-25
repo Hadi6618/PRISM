@@ -17,13 +17,13 @@ The two-stage Avenue pipeline in `STG-NF_YOLO.ipynb` uses YOLO26 detection, Byte
 
 The notebook successfully generated all 16 Avenue training clips and all 21 test clips. The exported ViTPose run reports approximately `64.14%` Avenue Micro AUC and `65.93%` Macro AUC, which is effectively the same as the existing AlphaPose result reported as approximately `64.2%` Micro AUC. Lowering the detector threshold did not produce a meaningful improvement.
 
-The current notebook training result is not a clean extractor comparison: it used trainable triplet attention and only three epochs. The established AlphaPose reference uses the ordinary STG-NF configuration. Therefore, the next run must isolate temporal tracking quality and use a comparable STG-NF baseline.
+Multiple STG-NF configurations have plateaued at approximately `64.2%` Avenue Micro AUC, so the working hypothesis is now pose extraction rather than STG-NF optimization. The current ViTPose/ByteTrack extraction is therefore the primary control. The next run must isolate temporal tracking quality by changing the tracker while reusing the strongest existing STG-NF configuration unchanged.
 
 ## 2. Goal
 
-Determine whether improving person identity continuity with appearance-assisted tracking raises Avenue STG-NF performance above the current ViTPose/ByteTrack and AlphaPose references.
+Determine whether improving person identity continuity with appearance-assisted tracking raises Avenue STG-NF performance above the matched ViTPose/ByteTrack control. The AlphaPose result remains a secondary historical reference.
 
-The primary success criterion is a reproducible improvement over the exact AlphaPose reference, not a one-off increase caused by rounding or a changed evaluation protocol.
+The primary success criterion is a reproducible improvement over the matched ByteTrack control, not a one-off increase caused by rounding or a changed evaluation protocol. Because the STG-NF configuration is held fixed, an improvement is attributed to the extracted pose/track data rather than to model tuning.
 
 ## 3. Non-Goals
 
@@ -32,7 +32,7 @@ This experiment will not:
 - sweep detector confidence values again;
 - change the ViTPose model size;
 - change crop geometry, frame aspect handling, or keypoint order;
-- introduce trainable STG-NF attention;
+- change the STG-NF architecture, training hyperparameters, or score-processing settings;
 - tune fusion weights or modify the MULDE stream;
 - overwrite existing AlphaPose or ByteTrack pose artifacts;
 - claim statistical significance from one training run.
@@ -43,7 +43,7 @@ If the result is inconclusive, later work may evaluate pose-stream complementari
 
 ### 4.1 BoT-SORT with explicit ReID: selected
 
-Keep the detector and ViTPose model fixed, replace ByteTrack with a pinned custom BoT-SORT configuration, and explicitly enable appearance association. This directly tests whether identity fragmentation and short occlusions are limiting STG-NF. It has additional runtime and can create incorrect merges between visually similar people, so track diagnostics are required.
+Keep the detector and ViTPose model fixed, replace ByteTrack with a pinned custom BoT-SORT configuration, and explicitly enable appearance association. This directly tests whether identity fragmentation and short occlusions are limiting STG-NF. It has additional runtime and can create incorrect merges between visually similar people, so track diagnostics are required. The existing ViTPose/ByteTrack JSONs and scores are the matched control; AlphaPose is only a secondary reference because it uses a different pose estimator and detector/tracker stack.
 
 ### 4.2 BoT-SORT without ReID
 
@@ -122,24 +122,23 @@ Extraction fails loudly for the affected clip when it encounters:
 
 The batch summary must make all failures visible. A run is not accepted as complete if any expected clip is missing or malformed.
 
-## 7. STG-NF Training and Export
+## 7. STG-NF Control and Export
 
-The one allowed STG-NF training run uses the ordinary baseline configuration so the tracker is the principal changed variable:
+The current strongest ViTPose/ByteTrack run is the locked STG-NF control. Before extraction, record the exact arguments and checkpoint metadata from the run that produced approximately `64.2%`, including:
 
-- `attention=none`;
-- `seg_len=24`;
-- training segment stride `6`;
-- test segment stride `1`;
-- `model_confidence` disabled;
-- 8 epochs;
-- batch size `256`;
-- Adamax with the existing `5e-4` base learning rate, scheduler, and weight decay;
-- an explicit seed recorded in the run manifest;
-- a fresh experiment directory.
+- attention type and all attention parameters;
+- `seg_len`, training stride, and test stride;
+- `model_confidence`, normalization, and confidence handling;
+- epochs, batch size, optimizer, learning rate, scheduler, weight decay, and seed;
+- STG-NF repository commit;
+- checkpoint path and checkpoint arguments;
+- score polarity, frame offset, and temporal smoothing.
 
-The model must be trained on the new BoT-SORT/ReID train poses and evaluated on the new test poses. Score export must use the same dataset paths, segment length, attention arguments, checkpoint, and model-shape arguments as training. The exported pickle must include all 21 Avenue test clips and its Micro and Macro AUC metadata must be recomputed from the saved per-frame arrays.
+The BoT-SORT/ReID pose run must be trained and exported with those same STG-NF settings. The only intended experimental change is the tracker-produced pose/track JSON. If the exact control configuration or checkpoint metadata cannot be recovered, the run is labeled a new comparison rather than a clean tracker ablation, and the missing control is resolved before drawing conclusions.
 
-The result must not use the three-epoch trainable-triplet configuration from the current notebook as the comparison baseline. That configuration can be retained as historical context only.
+The BoT-SORT model must use separate new train and test pose directories, a fresh output directory, and the same video, ground-truth, and evaluation paths, segment length, attention arguments, checkpoint-selection procedure, and score-export logic as the matched ByteTrack control. The exported pickle must include all 21 Avenue test clips, and its Micro and Macro AUC metadata must be recomputed from the saved per-frame arrays.
+
+The three-epoch trainable-triplet run remains historical context only; it must not be used as the matched control unless it is confirmed as the strongest configuration and its complete metadata is available.
 
 ## 8. Evaluation Protocol
 
@@ -158,8 +157,8 @@ The evaluation report contains:
 - Macro AUC and the number of videos contributing to it;
 - total evaluated frames and videos;
 - per-video AUC rows;
-- exact delta against the current ViTPose/ByteTrack export;
-- exact delta against the AlphaPose reference;
+- exact delta against the matched current ViTPose/ByteTrack control;
+- secondary delta against the AlphaPose reference;
 - the extraction diagnostics summary;
 - the complete configuration and artifact paths.
 
@@ -185,7 +184,8 @@ The run is technically valid only if:
 - all 16 Avenue training clips and all 21 test clips have validated tracked JSONs;
 - every JSON record contains valid COCO-17 data, a scalar detection score, and a unique track/frame key;
 - train and test sample shapes match STG-NF's expected `(3, 24, 18)` sample convention after loading;
-- the manifest records detector, pose, tracker, library versions, tracker configuration/hash, seed, STG-NF arguments, checkpoint, and output paths;
+- the manifest records detector, pose, tracker, library versions, tracker configuration/hash, seed, the complete locked STG-NF control arguments, checkpoint metadata, and output paths;
+- the BoT-SORT run uses the same STG-NF arguments and score-processing settings as the matched ByteTrack control;
 - the score pickle contains all 21 test clips;
 - stored Micro and Macro AUC values match recomputation from the exported arrays;
 - frame counts, labels, polarity, smoothing, and indexing match the reference protocol;
@@ -195,7 +195,7 @@ The numerical result is classified as follows:
 
 ### Keep as the preferred pose pipeline
 
-The BoT-SORT/ReID run is above the exact AlphaPose reference and the improvement is supported by valid diagnostics. The gain is provisional after one run and must be confirmed by a later repeat before being described as reproducible in a report or paper.
+The BoT-SORT/ReID run is above the matched ViTPose/ByteTrack control and the improvement is supported by valid diagnostics. The gain is provisional after one run and must be confirmed by a later repeat before being described as reproducible in a report or paper. The AlphaPose comparison is reported separately as historical context.
 
 ### Keep only for fusion evaluation
 
@@ -214,7 +214,7 @@ A gain of only a few hundredths of an AUC point is labeled inconclusive until a 
 | ReID incorrectly merges similar people | Record track lengths/gaps and inspect per-video regressions; keep the exact tracker YAML for rollback. |
 | ReID adds excessive extraction time or memory pressure | Use `model=auto`, process one clip sequentially, and record runtime per clip. |
 | Ultralytics tracker defaults drift | Pin or record the installed version and store the exact custom YAML content/hash. |
-| Training change is confused with tracker change | Use `attention=none`, the established 8-epoch baseline, an explicit seed, and matching export arguments. |
+| Training change is confused with tracker change | Recover and lock the complete strongest ByteTrack STG-NF configuration, then reuse it unchanged for BoT-SORT. |
 | Missing detections are silently converted into normal frames | Fail the affected clip and expose missing/zero-track counts in the manifest. |
 | AUC changes because of evaluation mismatch | Recompute metrics from the exported arrays under the same labels, polarity, frame indexing, and smoothing convention. |
 
