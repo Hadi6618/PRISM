@@ -54,8 +54,9 @@ whether that structure is exploitable at the scoring level.
 
 ## 2. Goal
 
-Determine whether the frame-level aggregation (global min over people,
-size-blind normalisation, unused confidence) is what caps Avenue at ~64%,
+Determine whether the Avenue ~64% cap is caused by the frame-level
+aggregation (global min over people, size-blind normalisation, unused
+confidence) or by unfiltered garbage detections reaching it — or neither —
 using only existing artifacts:
 
 - the 16 Avenue training + 21 Avenue test ViTPose/ByteTrack tracked-person
@@ -146,16 +147,67 @@ For every variant, report:
 
 Output: a CSV/JSON table of all variants, saved next to the run artifacts.
 
+## 5b. Part C — Simulated stricter detection/tracking (JSON filtering, no re-extraction)
+
+The alternative to scoring-side fixes is to prevent garbage at the source:
+raise the detection confidence bar, require keypoint quality, ignore tiny
+people, and drop unstable tracks — "do not detect them". This is testable at
+zero cost because the tracked-person JSONs already carry per-frame detection
+confidence (`scores`) and per-keypoint confidence, so stricter extraction can
+be simulated by deleting records from the existing JSONs and re-running the
+Part B baseline.
+
+Filters (applied to both train and test JSONs):
+
+1. **Detection-confidence floor** — drop person-frames with `scores < tau_det`,
+   tau_det in {0.4, 0.5, 0.7}.
+2. **Keypoint-quality floor** — drop a person-frame with fewer than K
+   confident keypoints (conf >= 0.3), K in {6, 10}; rejects partial and
+   heavily occluded detections.
+3. **Minimum person size** — drop person-frames with keypoint height < theta,
+   theta in {60, 80} px.
+4. **Minimum track length** — drop tracks with fewer than L frames,
+   L in {10, 24}.
+5. **Combined** — the conjunction that keeps the most train coverage while
+   removing the most test-time noise; reported as a table with per-filter
+   train/test segment counts.
+
+For every filter setting: re-run the exact Part B baseline (global min) and
+report Micro/Macro AUC, then combine the best filter with the best scoring
+variant from Part B.
+
+Interpretation:
+
+- Filtering alone breaks the plateau → extraction-side confirmation; the
+  follow-up is a real re-extraction with those exact thresholds (already
+  known from the simulation).
+- Filtering is flat but a Part B scoring variant helps → the noise is real
+  small-person keypoint jitter, not garbage detections; the scoring-side fix
+  is confirmed.
+- Both flat → identity continuity or model capacity; effort moves to the
+  tracking path.
+
+Caveats: (a) filtering also removes crowd people from *training*, changing
+the learned "normal" distribution — intended, but report train segment
+counts before/after; (b) simulated filtering is a ceiling, like the pooling
+variants: a real higher-threshold extraction may also lose some valid
+detections, so a positive result is confirmed only by the real run.
+
 ## 6. Decision Rule
 
 - The baseline reproduces ~64.14% → the experiment is trustworthy.
-- Any variant gains ≥ ~1–2 AUC points over the baseline → hypothesis
-  confirmed; the next spec designs the full scoring experiment (confidence
-  gating + size-weighted pooling + `seg_len`/smoothing changes) on the
-  existing extraction.
-- All variants flat → scoring is ruled out cheaply; the constraint is
-  identity continuity (BoT-SORT/ReID + track stitching path) or model
-  capacity (STG-NF tuning), and effort moves there.
+- A Part C filter setting (simulated stricter detection) alone gains
+  ≥ ~1–2 AUC points → extraction-side hypothesis confirmed; the follow-up is
+  a real re-extraction with those thresholds, which are already known from
+  the simulation.
+- A Part B pooling variant gains ≥ ~1–2 AUC points (with the best Part C
+  filter held fixed) → scoring-side hypothesis confirmed; the next spec
+  designs the full scoring experiment (confidence gating + size-weighted
+  pooling + `seg_len`/smoothing changes).
+- All variants flat → both scoring aggregation and detection filtering are
+  ruled out cheaply; the constraint is identity continuity (BoT-SORT/ReID +
+  track stitching path) or model capacity (STG-NF tuning), and effort moves
+  there.
 
 ## 7. Caveats and Risks
 
@@ -172,7 +224,8 @@ Output: a CSV/JSON table of all variants, saved next to the run artifacts.
 1. Per-segment size/confidence statistics for train and test (CSV).
 2. Alternative-pooling AUC table (CSV/JSON) with per-video rows.
 3. Argmin-person attribution for false-positive and true-positive frames.
-4. A run manifest recording the exact checkpoint, args, and input JSON paths.
+4. Filtering-AUC table with per-filter train/test segment coverage (CSV/JSON).
+5. A run manifest recording the exact checkpoint, args, and input JSON paths.
 
 ## 9. Next Transition
 
