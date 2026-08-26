@@ -36,6 +36,17 @@ Review of the scoring path (`utils/scoring_utils.py`, `utils/data_utils.py`, `ut
    frame should mean. The export additionally applies six cumulative Gaussian
    passes (σ = 1..6), which smears brief anomalies.
 
+A clarifying note on VAD frame semantics: a frame is labelled abnormal if
+*any* person is anomalous — five people walking normally while one lies on
+the ground is an abnormal frame, and the lying person must drive the frame
+score. The global min-pool is therefore the semantically correct aggregation
+for these labels; it is **not** the bug. The real failure mode is that a
+*garbage* person (false detection, jittery small track, occlusion artifact)
+can also win the min on a frame where no real anomaly exists, raising the
+false-positive floor. The diagnostic separates these two cases with the
+argmin-person attribution (Section 5): do false positives come from small
+crowd-sized people or from real foreground-sized people?
+
 Observation from the dataset itself: Avenue test anomalies are consistently
 close to the camera, large, and sharp, while the background crowd in both
 train and test is far away, small, and jittery. The diagnostic below tests
@@ -111,6 +122,20 @@ does and replace the global `amin` with each variant:
    τ ∈ {0.3, 0.5, 0.7}.
 6. **Confidence-weighted** — segment score × mean confidence before pooling
    (what `model_confidence=True` approximates without retraining).
+
+Semantic note on the variants: under VAD frame labels ("abnormal if any
+person is anomalous"), the true aggregation is a min over *valid* persons —
+the lying person among five walkers must drive the frame. Variant 4
+(k-th smallest) therefore violates this semantics: with a single anomalous
+person, the 2nd-worst person is a normal walker and the anomaly is missed.
+It is retained **as a diagnostic probe only**, to quantify how much a single
+noise person dominates the global min; it is not a candidate final design.
+The viable robustness direction is *filter-then-min*: exclude unreliable
+persons (low confidence, tiny size — variants 2 and 5) or pull their scores
+toward normal (variant 6) *before* taking the min, so the worst *real* person
+still drives the frame. One residual limitation applies to every variant: if
+the anomalous person is missed by detection entirely, no pooling change can
+recover the frame — that is a detection/tracking responsibility.
 
 For every variant, report:
 
