@@ -193,6 +193,65 @@ counts before/after; (b) simulated filtering is a ceiling, like the pooling
 variants: a real higher-threshold extraction may also lose some valid
 detections, so a positive result is confirmed only by the real run.
 
+## 5c. Part D — Failure attribution and evidence (why a frame/clip scored badly)
+
+The diagnostic also explains *why* individual frames and clips score badly,
+so results are traceable to concrete objects rather than reported as bare
+AUC numbers.
+
+**End-to-end traceability.** Every flagged frame score is decomposed as:
+`frame score → argmin person → track ID → segment → raw JSON pose + size +
+confidence → reason code`. Every number in the report points at a concrete
+row in the extracted JSONs. Descriptive attribution (who drove the score —
+certain, from the min-pool argmin) is reported separately from causal claims
+(what caused the AUC loss — established only by the counterfactual probes).
+
+**Reason-code taxonomy** (every rule stated with its threshold so the
+histogram is reproducible):
+
+- `CROWD_JITTER` — argmin person is small (keypoint height < theta) with
+  high frame-to-frame keypoint jitter;
+- `GARBAGE_DET` — low detection confidence, fewer than K confident keypoints,
+  or a merged box (keypoint span much wider than the person's box);
+- `OCCLUSION_GAP` — the argmin track has an internal gap within ±seg_len of
+  the flagged frame;
+- `ID_SWITCH` — the argmin track is shorter than seg_len (newborn/reborn
+  track);
+- `NO_DET` — no person tracked at the frame (the inf → max-anomaly
+  artifact);
+- `REAL_ANOMALY` — true positive (correct behaviour);
+- `MISSED_NO_DET` — anomaly-event frames where the anomaly person has no
+  track;
+- `MISSED_MASKED` — anomaly person tracked but outscored by a
+  non-anomalous person;
+- `MISSED_NORMALIZED` — anomaly person tracked and scored normal by the flow.
+
+**Per-clip report.** For every test clip: per-video AUC and deficit vs
+overall; each ground-truth anomaly *event* checked for detection (is the
+score peak inside the event window?); reason-code histogram per clip. Events
+are anchored to ground-truth windows, not bare label=1 frames.
+
+**Aggregate evidence.** Reason-code histogram over the top-1% (minimum 100)
+false-positive frames and over all missed anomaly events. The attribution
+runs on BOTH extraction stacks (AlphaPose and ViTPose/ByteTrack) and the
+histograms are compared: if both are dominated by `CROWD_JITTER`, that
+explains the shared plateau directly — the same mechanism under different
+extractors.
+
+**Counterfactual probes (causation).**
+
+- *Delete-person:* remove the argmin person's track from the JSON and
+  re-aggregate. Free — other persons' segment scores are unchanged, so this
+  is pure re-pooling with no model pass. A false positive that disappears
+  was caused by that object.
+- *Gap-interpolation:* simulate keypoint interpolation across the occlusion
+  gap and score only the newly created segments (one small extra model
+  pass). A missed event that recovers was caused by track fragmentation.
+
+**Guardrails.** Reason-code thresholds are recorded in the run manifest;
+descriptive vs causal claims are labelled in the report; events use
+ground-truth windows.
+
 ## 6. Decision Rule
 
 - The baseline reproduces ~64.14% → the experiment is trustworthy.
@@ -208,6 +267,11 @@ detections, so a positive result is confirmed only by the real run.
   ruled out cheaply; the constraint is identity continuity (BoT-SORT/ReID +
   track stitching path) or model capacity (STG-NF tuning), and effort moves
   there.
+- The Part D reason histogram is the mechanism-level interpretation of
+  whatever the AUCs show: a gain attributed to `GARBAGE_DET` removal
+  confirms Part C; a gain driven by `CROWD_JITTER` frames confirms size
+  weighting (Part B); `OCCLUSION_GAP`/`ID_SWITCH` dominance redirects to
+  the tracking path even if the pooling variants are flat.
 
 ## 7. Caveats and Risks
 
@@ -225,7 +289,12 @@ detections, so a positive result is confirmed only by the real run.
 2. Alternative-pooling AUC table (CSV/JSON) with per-video rows.
 3. Argmin-person attribution for false-positive and true-positive frames.
 4. Filtering-AUC table with per-filter train/test segment coverage (CSV/JSON).
-5. A run manifest recording the exact checkpoint, args, and input JSON paths.
+5. Per-clip attribution report with reason-code histograms and per-event
+   detection checks (CSV/JSON), for both extraction stacks.
+6. Counterfactual results: delete-person and gap-interpolation probes on the
+   top-K false-positive frames and top-K missed events.
+7. A run manifest recording the exact checkpoint, args, input JSON paths,
+   and every reason-code threshold.
 
 ## 9. Next Transition
 
