@@ -176,9 +176,9 @@ flag or a single `DATASET` variable in the notebook config cell.
 | :-- | --: |
 | MULDE (appearance) | 79.66% |
 | STG-NF (pose) | 83.93% |
-| **PRISM (β₁ = 0.546, β₂ = 0.454, global_rank, per-stream σ)** | **89.32%** |
+| **PRISM (β₁ = 0.546, β₂ = 0.454, global_rank, per-stream σ)** | **89.9%** |
 
-Fusion adds **+5.4 pp** over the strongest single stream (83.93% → 89.32%) — both streams
+Fusion adds **+6.0 pp** over the strongest single stream (83.93% → 89.9%) — both streams
 contribute non-redundant signal. The optimal weights are close to 50/50
 because the two models' errors are de-correlated: MULDE catches the
 vehicle/object anomalies that STG-NF is structurally blind to, and the two
