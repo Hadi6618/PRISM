@@ -18,8 +18,14 @@ scores yields a substantial improvement over either model alone.
 | Method | Stream | ShanghaiTech (Micro AUC) | Avenue (Micro AUC) |
 | :-- | :-- | ---: | ---: |
 | MULDE (Hiera-L + DSM) | Appearance | 79.7% | 81.4% |
-| STG-NF (AlphaPose + Flow) | Pose | 84% | 64.2% |
-| **PRISM (fusion)** | **Both** | **89.9%** | **83%** |
+| STG-NF (pose) | Skeleton | 83.9% | 64.2% |
+| **PRISM (fusion, 2-stream)** | **Both** | **89.9%** | **83%** |
+| **PRISM 3-way (STG-NF + MULDE + CAE)** | **All three** | — | **87.3%** |
+
+> ShanghaiTech uses the AlphaPose pose-extraction stack; Avenue uses the
+> improved YOLO26 + ViTPose++ stack (the original AlphaPose export scores
+> 57.0% on Avenue, `avenue_stgnf_scores_57.pkl`). The ShanghaiTech
+> three-stream evaluation is pending (no CAE scores for that dataset yet).
 
 ---
 
@@ -77,7 +83,7 @@ aligned, normalised, and fused at the **frame level** (late fusion).
   │  1. Per-video frame alignment + polarity correction          │
   │     (auto-detects offset, score polarity, video-ID aliases) │
   │  2. Global rank normalization to [0, 1]                      │
-  │  3. Per-video Gaussian temporal smoothing (σ tuned per set)  │
+  │  3. Per-stream Gaussian smoothing (σ per set)                │
   │  4. Grid-search: β₁·STG-NF + β₂·MULDE                      │
   └──────────────────────────────┬───────────────────────────────┘
                                  ▼
@@ -141,10 +147,11 @@ deterministic 4-step procedure before combining them:
 2. **Global rank normalization** — convert each model's scores to `[0, 1]`
    ranks (Borda-style). More robust than min-max to the heavy tails of
    normalizing-flow likelihoods.
-3. **Temporal smoothing** — per-video 1-D Gaussian filter (σ grid-searched
+3. **Temporal smoothing** — per-stream 1-D Gaussian filter (σ_STG, σ_MULDE grid-searched
    per dataset) suppresses single-frame spikes from pose jitter.
 4. **Weighted combination** — `score = β₁·STG-NF + β₂·MULDE` with the
-   weights found by grid search over 1001 candidates on the test split.
+   weights found by grid search over 101 candidates (β₁ = 0.00, 0.01, …,
+   1.00) on the test split.
 
 ---
 
@@ -168,10 +175,10 @@ flag or a single `DATASET` variable in the notebook config cell.
 | Method | Micro AUC |
 | :-- | --: |
 | MULDE (appearance) | 79.66% |
-| STG-NF (pose) | 83.53% |
-| **PRISM (β₁ = 0.546, β₂ = 0.454, global_rank, σ = 15)** | **89.32%** |
+| STG-NF (pose) | 83.93% |
+| **PRISM (β₁ = 0.546, β₂ = 0.454, global_rank, per-stream σ)** | **89.32%** |
 
-Fusion adds **+5.8 pp** over the strongest single stream — both streams
+Fusion adds **+5.4 pp** over the strongest single stream (83.93% → 89.32%) — both streams
 contribute non-redundant signal. The optimal weights are close to 50/50
 because the two models' errors are de-correlated: MULDE catches the
 vehicle/object anomalies that STG-NF is structurally blind to, and the two
@@ -195,19 +202,38 @@ normalization choices and the third-model polarity in
 third-model smoothing sigma at `0.0`; select `raw_score` instead when the
 `0.5` threshold was defined on the raw output.
 
+**Avenue three-stream result** (21 test videos, 15 323 aligned frames):
+
+| Method | Micro AUC |
+| :-- | --: |
+| MULDE (appearance) | 81.35% |
+| CAE (third model, `smoothed_score`) | 78.09% |
+| STG-NF (pose, YOLO26 + ViTPose++) | 64.17% |
+| **PRISM 3-way (w_STG = 0.05, w_MULDE = 0.40, w_CAE = 0.55)** | **87.28%** |
+
+Fusion adds **+5.9 pp** over the strongest single stream (81.35% → 87.28%)
+and **+4.3 pp** over the two-stream fusion (83%). Inputs:
+`avenue_stgnf_scores_64.2.pkl`, `avenue_mulde_scores_81_4.pkl`, and
+`frame_anomaly_scores_79_AUC.csv` (CAE; fused on its `smoothed_score`
+column with `third_normalization = none`, σ_CAE = 0). Produced by the
+three-stream configuration of `PRISM_Runner.ipynb` (dataset `Avenue`); the
+weight grid, JSON report, and per-frame CSV are written to the configured
+`three_way_ensemble` output directory.
+
 ### Avenue (21 test videos)
 
 | Method | Micro AUC |
 | :-- | --: |
 | MULDE (appearance) | 81.4% |
 | STG-NF (pose) | 64.2% |
-| **PRISM** | 83% |
+| **PRISM (2-stream)** | 83% |
 
 Avenue results are computed by setting `DATASET = 'Avenue'` in the notebook
 or passing `--dataset Avenue` to `PRISM.py`. The Avenue AUC gain is expected
 to be larger than ShanghaiTech because STG-NF is much weaker relative to
 MULDE on Avenue, so MULDE dominates the fusion and the pose stream acts
-purely as a noisy supplement.
+purely as a noisy supplement. Adding the CAE stream (three-way fusion,
+above) raises the Avenue fused AUC to 87.28%.
 
 ### Metrics
 
